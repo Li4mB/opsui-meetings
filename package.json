@@ -1,0 +1,15 @@
+{
+  "name": "opsui-meetings",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "dev:api": "npm run dev --workspace @opsui/api",
+    "dev:desktop": "npm run dev --workspace @opsui/desktop",
+    "lint": "npm run lint --workspaces --if-present"
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "name": "@opsui/api",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "build": "npm run build --workspace @opsui/shared && tsc -p tsconfig.json",
+    "dev": "npm run build --workspace @opsui/shared && tsx watch src/server.ts",
+    "start": "node dist/server.js",
+    "openai:vector-store": "node ./scripts/create-vector-store.mjs"
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.1.0",
+    "@fastify/sensible": "^6.0.3",
+    "@opsui/shared": "0.1.0",
+    "argon2": "^0.44.0",
+    "better-sqlite3": "^12.4.1",
+    "dotenv": "^17.2.3",
+    "fastify": "^5.6.2",
+    "googleapis": "^167.0.0",
+    "jose": "^6.1.2",
+    "nanoid": "^5.1.6",
+    "openai": "^6.29.0",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^24.12.0",
+    "tsx": "^4.20.6",
+    "typescript": "^5.9.3"
+  }
+}

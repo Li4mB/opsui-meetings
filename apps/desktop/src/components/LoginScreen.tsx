@@ -1,0 +1,82 @@
+import { useState } from "react";
+
+type Props = {
+  isLoading: boolean;
+  error: string | null;
+  onSubmit: (input: { username: string; password: string }) => Promise<void>;
+};
+
+export const LoginScreen = ({ isLoading, error, onSubmit }: Props) => {
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+
+  const handleSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    await onSubmit({ username, password });
+  };
+
+  return (
+    <div className="login-shell">
+      <section className="login-hero">
+        <div className="eyebrow">OpsUI Internal Platform</div>
+        <h1>Meet every demo booking with the full picture.</h1>
+        <p>
+          OpsUI Meetings gives the team a shared live calendar, fast assignment
+          workflows, and offline access to recently synced bookings.
+        </p>
+
+        <div className="hero-grid">
+          <div className="hero-card">
+            <span>Calendar + list views</span>
+            <strong>Team-wide visibility</strong>
+          </div>
+          <div className="hero-card">
+            <span>Viewer-local timezones</span>
+            <strong>No manual conversion</strong>
+          </div>
+          <div className="hero-card">
+            <span>Google Meet + brief links</span>
+            <strong>One-click prep</strong>
+          </div>
+        </div>
+      </section>
+
+      <section className="login-panel">
+        <div className="panel-badge">Approved OpsUI users only</div>
+        <h2>Sign in</h2>
+        <p className="panel-copy">
+          Use your internal OpsUI username and password to continue.
+        </p>
+
+        <form className="login-form" onSubmit={handleSubmit}>
+          <label>
+            Username
+            <input
+              autoComplete="username"
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
+              placeholder="Enter your username"
+            />
+          </label>
+
+          <label>
+            Password
+            <input
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              placeholder="Enter your password"
+            />
+          </label>
+
+          {error ? <div className="form-error">{error}</div> : null}
+
+          <button className="primary-button" disabled={isLoading} type="submit">
+            {isLoading ? "Signing in..." : "Open OpsUI Meetings"}
+          </button>
+        </form>
+      </section>
+    </div>
+  );
+};

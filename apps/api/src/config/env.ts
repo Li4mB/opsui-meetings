@@ -1,0 +1,40 @@
+import { config } from "dotenv";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const appRoot = path.resolve(__dirname, "..", "..");
+
+config({
+  path: path.resolve(appRoot, ".env"),
+});
+
+const parseBoolean = (value: string | undefined, fallback: boolean) => {
+  if (value === undefined) {
+    return fallback;
+  }
+
+  return value.toLowerCase() === "true";
+};
+
+export const env = {
+  appRoot,
+  port: Number(process.env.PORT ?? 8787),
+  jwtSecret: process.env.JWT_SECRET ?? "opsui-dev-secret",
+  apiOrigin: process.env.OPSUI_API_ORIGIN ?? "http://localhost:1420",
+  useSampleData: parseBoolean(process.env.OPSUI_USE_SAMPLE_DATA, true),
+  seedAdminUsername: process.env.OPSUI_SEED_ADMIN_USERNAME ?? "opsui-admin",
+  seedAdminPassword: process.env.OPSUI_SEED_ADMIN_PASSWORD ?? "ChangeMe123!",
+  seedAdminDisplayName: process.env.OPSUI_SEED_ADMIN_DISPLAY_NAME ?? "OpsUI Admin",
+  googleCalendarId: process.env.OPSUI_GOOGLE_CALENDAR_ID ?? "",
+  googleServiceAccountJson: process.env.OPSUI_GOOGLE_SERVICE_ACCOUNT_JSON ?? "",
+  googleDriveBriefsFolderId:
+    process.env.OPSUI_GOOGLE_DRIVE_BRIEFS_FOLDER_ID ?? "",
+  openAiApiKey: process.env.OPENAI_API_KEY ?? "",
+  openAiModel: process.env.OPSUI_OPENAI_MODEL ?? "gpt-5.2",
+  openAiVectorStoreId: process.env.OPSUI_OPENAI_VECTOR_STORE_ID ?? "",
+  makeMeetingRequestWebhookUrl:
+    process.env.OPSUI_MAKE_MEETING_REQUEST_WEBHOOK_URL ?? "",
+  dbPath: path.resolve(appRoot, "data", "opsui-meetings.sqlite"),
+};
