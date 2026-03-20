@@ -15,13 +15,65 @@ type Props = {
   meetings: Meeting[];
   selectedMeetingId: string | null;
   onSelect: (meetingId: string) => void;
+  variant?: "active" | "past";
 };
 
 export const MeetingList = ({
   meetings,
   selectedMeetingId,
   onSelect,
+  variant = "active",
 }: Props) => {
+  if (variant === "past") {
+    const pastMeetings = [...meetings].sort((left, right) =>
+      right.startAtUtc.localeCompare(left.startAtUtc),
+    );
+
+    if (!pastMeetings.length) {
+      return (
+        <div className="meetings-list meetings-list--past">
+          <div className="empty-state">
+            <h3>No past meetings yet</h3>
+            <p>Resolved meetings will appear here once they leave the active queue.</p>
+          </div>
+        </div>
+      );
+    }
+
+    return (
+      <div className={`meetings-list meetings-list--past ${selectedMeetingId ? "meetings-list--narrow" : ""}`}>
+        <div className="past-table">
+          <div className="past-table__head">
+            <span>Date</span>
+            <span>Time</span>
+            <span>Client</span>
+            <span>Company</span>
+            <span>Assigned</span>
+            <span>Status</span>
+          </div>
+
+          {pastMeetings.map((meeting) => (
+            <button
+              className={`past-table__row ${selectedMeetingId === meeting.id ? "past-table__row--selected" : ""}`}
+              key={meeting.id}
+              onClick={() => onSelect(meeting.id)}
+              type="button"
+            >
+              <span>{formatMeetingGroupLabel(meeting.startAtUtc)}</span>
+              <span className="past-table__mono">
+                {formatMeetingTimeChip(meeting.startAtUtc)}
+              </span>
+              <span>{meeting.clientName}</span>
+              <span>{meeting.company}</span>
+              <span>{meeting.assignedUserName ?? "Unassigned"}</span>
+              <span className="status-badge status-completed">Resolved</span>
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
   const groups = meetings.reduce<Record<string, Meeting[]>>((accumulator, meeting) => {
     const key = formatMeetingGroupLabel(meeting.startAtUtc);
     accumulator[key] ??= [];
@@ -74,7 +126,6 @@ export const MeetingList = ({
                   <div className="meeting-card__body">
                     <div className="meeting-card__top">
                       <div className="meeting-card__datetime">
-                        <span className="meeting-card__date">{label}</span>
                         <span className="meeting-card__time">
                           {formatMeetingTimeChip(meeting.startAtUtc)}
                         </span>

@@ -1,7 +1,7 @@
 {
   "$schema": "../../../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "OpsUI Meetings",
-  "version": "0.1.0",
+  "productName": "OpsUI Meetings Dashboard",
+  "version": "0.1.1",
   "identifier": "com.opsui.meetings",
   "build": {
     "frontendDist": "../dist",
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "OpsUI Meetings",
+        "title": "OpsUI Meetings Dashboard",
         "width": 1540,
         "height": 980,
         "minWidth": 1180,
@@ -52,7 +52,7 @@
       "endpoints": [
         "https://github.com/opsui/opsui-meetings/releases/latest/download/latest.json"
       ],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE2NDlEMTVBNzkwNkI4MkQKUldRdHVBWjVXdEZKcG9jVkRNRXVyTjhsb0JzQXNBUjY1a2tTR2dUKzk1R1hldkFWbklnYkF5algK"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQwM0IzQjQ0NjcxNENDREQKUldUZHpCUm5SRHM3ME9zYzJLV3NwTEZyenlYZjVKTkdMTk5jTklGcHFPRDBKSGNGZTc5aXFvQkQK"
     }
   }
 }

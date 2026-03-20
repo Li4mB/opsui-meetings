@@ -141,8 +141,8 @@ npm run build:signed
 
 ### Current verified build outputs
 
-- installer: [OpsUI Meetings_0.1.0_x64-setup.exe](C:/Users/daabo/OneDrive/Documents/OpsUI/opsui-meetings/apps/desktop/src-tauri/target/release/bundle/nsis/OpsUI%20Meetings_0.1.0_x64-setup.exe)
-- signature: [OpsUI Meetings_0.1.0_x64-setup.exe.sig](C:/Users/daabo/OneDrive/Documents/OpsUI/opsui-meetings/apps/desktop/src-tauri/target/release/bundle/nsis/OpsUI%20Meetings_0.1.0_x64-setup.exe.sig)
+- installer: [OpsUI Meetings Dashboard_0.1.1_x64-setup.exe](C:/Users/daabo/OneDrive/Documents/OpsUI/opsui-meetings/apps/desktop/src-tauri/target/release/bundle/nsis/OpsUI%20Meetings%20Dashboard_0.1.1_x64-setup.exe)
+- signature: [OpsUI Meetings Dashboard_0.1.1_x64-setup.exe.sig](C:/Users/daabo/OneDrive/Documents/OpsUI/opsui-meetings/apps/desktop/src-tauri/target/release/bundle/nsis/OpsUI%20Meetings%20Dashboard_0.1.1_x64-setup.exe.sig)
 - raw exe: [opsui-meetings.exe](C:/Users/daabo/OneDrive/Documents/OpsUI/opsui-meetings/apps/desktop/src-tauri/target/release/opsui-meetings.exe)
 
 ## Security Notes
@@ -156,4 +156,4 @@ npm run build:signed
 
 ## Important production follow-up
 
-The current public updater key in [tauri.conf.json](C:/Users/daabo/OneDrive/Documents/OpsUI/opsui-meetings/apps/desktop/src-tauri/tauri.conf.json) was generated for local build verification. Replace it with your permanent OpsUI release key before production rollout.
+Make sure the same updater private key is preserved in GitHub secrets for all future releases. Existing desktop installs will only accept updates signed by the matching public key already shipped in [tauri.conf.json](C:/Users/daabo/OneDrive/Documents/OpsUI/opsui-meetings/apps/desktop/src-tauri/tauri.conf.json).

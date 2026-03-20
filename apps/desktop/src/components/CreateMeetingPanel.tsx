@@ -62,6 +62,8 @@ export const CreateMeetingPanel = ({ isSubmitting, onSubmit }: Props) => {
   const [form, setForm] = useState<CreateMeetingRequestInput>(initialForm);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const allModulesSelected =
+    form.modules.length === meetingRequestModuleOptions.length;
 
   const toggleModule = (module: MeetingRequestModule) => {
     setForm((current) => ({
@@ -69,6 +71,13 @@ export const CreateMeetingPanel = ({ isSubmitting, onSubmit }: Props) => {
       modules: current.modules.includes(module)
         ? current.modules.filter((item) => item !== module)
         : [...current.modules, module],
+    }));
+  };
+
+  const handleSelectAllModules = () => {
+    setForm((current) => ({
+      ...current,
+      modules: [...meetingRequestModuleOptions],
     }));
   };
 
@@ -149,7 +158,7 @@ export const CreateMeetingPanel = ({ isSubmitting, onSubmit }: Props) => {
             <section className="create-meeting-intro__panel">
               <span className="eyebrow">Best practice</span>
               <ul className="create-meeting-checklist">
-                <li>Use the client’s real email and direct phone number.</li>
+                <li>Use the client's real email and direct phone number.</li>
                 <li>Pick every module they mention, even if early stage.</li>
                 <li>Use additional info for pain points or key context.</li>
                 <li>Choose the preferred date and time exactly as requested.</li>
@@ -263,9 +272,19 @@ export const CreateMeetingPanel = ({ isSubmitting, onSubmit }: Props) => {
             </section>
 
             <section className="create-meeting-section">
-              <div className="create-meeting-section__header">
-                <span className="eyebrow">Modules</span>
-                <h2>What they want help with</h2>
+              <div className="create-meeting-section__header create-meeting-section__header--modules">
+                <button
+                  className="create-meeting-select-all"
+                  disabled={allModulesSelected}
+                  onClick={handleSelectAllModules}
+                  type="button"
+                >
+                  Select All
+                </button>
+                <div>
+                  <span className="eyebrow">Modules</span>
+                  <h2>What they want help with</h2>
+                </div>
               </div>
 
               <div className="create-meeting-module-grid">
@@ -280,7 +299,7 @@ export const CreateMeetingPanel = ({ isSubmitting, onSubmit }: Props) => {
                       type="button"
                     >
                       <span className="create-meeting-module-card__checkbox">
-                        {selected ? "✓" : ""}
+                        {selected ? "OK" : ""}
                       </span>
                       <span>{module}</span>
                     </button>

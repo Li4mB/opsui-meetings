@@ -27,7 +27,6 @@ import {
   resolveMeeting,
   saveMeetingGuide,
   syncMeetings,
-  unlockMeetingGuide,
   updateUser,
 } from "./lib/api";
 import {
@@ -44,13 +43,26 @@ import {
   saveUsersCache,
 } from "./lib/cache";
 import {
+  clearStoredSession,
+  loadStoredSession,
+  saveStoredSession,
+} from "./lib/session";
+import {
   closeEmbeddedCurrentMeetingView,
   closeCurrentMeetingWindow,
+  isTauriApp,
   openExternalUrl,
 } from "./lib/platform";
 import { useAppStore } from "./store/app-store";
 import { AppShell } from "./components/AppShell";
 import { LoginScreen } from "./components/LoginScreen";
+import { UpdateGate } from "./components/UpdateGate";
+import { normalizeMeeting, normalizeMeetings } from "./lib/meeting-normalization";
+import {
+  checkForAppUpdate,
+  installAppUpdate,
+  type UpdateState,
+} from "./lib/updater";
 
 type BootState = "loading" | "ready" | "error";
 const STARTUP_TIMEOUT_MS = 3000;
@@ -65,6 +77,7 @@ async function withTimeout<T>(promise: Promise<T>, fallback: T): Promise<T> {
 }
 
 const App = () => {
+  const updaterEnabled = !import.meta.env.DEV && isTauriApp();
   const session = useAppStore((state) => state.session);
   const meetings = useAppStore((state) => state.meetings);
   const pastMeetings = useAppStore((state) => state.pastMeetings);
@@ -98,6 +111,9 @@ const App = () => {
   const [bootError, setBootError] = useState<string | null>(null);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loggingIn, setLoggingIn] = useState(false);
+  const [updateState, setUpdateState] = useState<UpdateState>(
+    updaterEnabled ? { status: "checking" } : { status: "ready" },
+  );
   const deferredQuery = useDeferredValue(filters.query.trim().toLowerCase());
 
   const selectedMeeting =
@@ -114,15 +130,16 @@ const App = () => {
       return null;
     }
 
-    return (
+    const matchedMeeting =
       nextMeetings.find(
         (meeting) => meeting.googleEventId === snapshot.googleEventId,
       ) ??
       nextPastMeetings.find(
         (meeting) => meeting.googleEventId === snapshot.googleEventId,
       ) ??
-      snapshot
-    );
+      snapshot;
+
+    return normalizeMeeting(matchedMeeting);
   };
 
   const matchesFilters = (meeting: Meeting) => {
@@ -173,16 +190,18 @@ const App = () => {
       lastSuccessfulSyncAt: string | null;
     },
   ) => {
+    const normalizedMeetings = normalizeMeetings(incomingMeetings.meetings);
+    const normalizedPastMeetings = normalizeMeetings(incomingPastMeetings.meetings);
     const nextCurrentMeeting = reconcileCurrentMeeting(
       currentMeeting,
-      incomingMeetings.meetings,
-      incomingPastMeetings.meetings,
+      normalizedMeetings,
+      normalizedPastMeetings,
     );
 
     startTransition(() => {
       setUsers(incomingUsers);
-      setMeetings(incomingMeetings.meetings, incomingMeetings.lastSuccessfulSyncAt);
-      setPastMeetings(incomingPastMeetings.meetings);
+      setMeetings(normalizedMeetings, incomingMeetings.lastSuccessfulSyncAt);
+      setPastMeetings(normalizedPastMeetings);
       setCurrentMeeting(nextCurrentMeeting);
       setOffline(false);
       setSyncState("idle", null);
@@ -190,15 +209,21 @@ const App = () => {
 
     await Promise.all([
       saveUsersCache(incomingUsers),
-      saveMeetingsCache(incomingMeetings),
-      savePastMeetingsCache(incomingPastMeetings),
+      saveMeetingsCache({
+        ...incomingMeetings,
+        meetings: normalizedMeetings,
+      }),
+      savePastMeetingsCache({
+        ...incomingPastMeetings,
+        meetings: normalizedPastMeetings,
+      }),
       saveCurrentMeetingCache(nextCurrentMeeting),
     ]);
   };
 
   const resetSession = async (message?: string) => {
     clearWorkspace();
-    await clearSessionCache();
+    await Promise.all([clearSessionCache(), clearStoredSession()]);
     setLoginError(message ?? null);
   };
 
@@ -223,7 +248,10 @@ const App = () => {
       };
 
       setSession(nextSession);
-      await saveSessionCache(nextSession);
+      await Promise.all([
+        saveSessionCache(nextSession),
+        saveStoredSession(nextSession),
+      ]);
 
       if (options.syncFirst) {
         await syncMeetings(nextSession.token);
@@ -273,20 +301,48 @@ const App = () => {
             }),
             withTimeout(loadCurrentMeetingCache(), null),
             withTimeout(loadUsersCache(), []),
-            withTimeout(loadSessionCache(), null),
+            withTimeout(
+              (async () => {
+                const storedSession = await loadStoredSession();
+                return storedSession ?? (await loadSessionCache());
+              })(),
+              null,
+            ),
           ]);
 
         if (!active) {
           return;
         }
 
+        const normalizedCachedMeetings = {
+          ...cachedMeetings,
+          meetings: normalizeMeetings(cachedMeetings.meetings),
+        };
+        const normalizedCachedPastMeetings = {
+          ...cachedPastMeetings,
+          meetings: normalizeMeetings(cachedPastMeetings.meetings),
+        };
+        const normalizedCachedCurrentMeeting = cachedCurrentMeeting
+          ? normalizeMeeting(cachedCurrentMeeting)
+          : null;
+
         startTransition(() => {
-          setMeetings(cachedMeetings.meetings, cachedMeetings.lastSuccessfulSyncAt);
-          setPastMeetings(cachedPastMeetings.meetings);
-          setCurrentMeeting(cachedCurrentMeeting);
+          setMeetings(
+            normalizedCachedMeetings.meetings,
+            normalizedCachedMeetings.lastSuccessfulSyncAt,
+          );
+          setPastMeetings(normalizedCachedPastMeetings.meetings);
+          setCurrentMeeting(normalizedCachedCurrentMeeting);
           setUsers(cachedUsers);
           setSession(cachedSession);
         });
+
+        if (cachedSession) {
+          void Promise.all([
+            saveSessionCache(cachedSession),
+            saveStoredSession(cachedSession),
+          ]);
+        }
 
         setBootState("ready");
 
@@ -297,7 +353,7 @@ const App = () => {
         setBootError(
           error instanceof Error
             ? error.message
-            : "Unable to start OpsUI Meetings",
+            : "Unable to start OpsUI Meetings Dashboard",
         );
         setBootState("error");
       }
@@ -325,7 +381,10 @@ const App = () => {
     try {
       const nextSession = await login(credentials);
       setSession(nextSession);
-      await saveSessionCache(nextSession);
+      await Promise.all([
+        saveSessionCache(nextSession),
+        saveStoredSession(nextSession),
+      ]);
       await refreshWorkspace(nextSession, { syncFirst: true });
     } catch (error) {
       setLoginError(
@@ -340,7 +399,7 @@ const App = () => {
     await closeEmbeddedCurrentMeetingView();
     await closeCurrentMeetingWindow();
     clearWorkspace();
-    await clearSessionCache();
+    await Promise.all([clearSessionCache(), clearStoredSession()]);
     setLoginError(null);
   };
 
@@ -351,11 +410,11 @@ const App = () => {
 
     try {
       setSyncState("syncing", "Saving assignment...");
-      const updatedMeeting = await assignMeeting(
+      const updatedMeeting = normalizeMeeting(await assignMeeting(
         session.token,
         meetingId,
         assignedUserId,
-      );
+      ));
       const nextMeetings = meetings.map((meeting) =>
         meeting.id === updatedMeeting.id ? updatedMeeting : meeting,
       );
@@ -479,12 +538,13 @@ const App = () => {
       return;
     }
 
+    const normalizedMeeting = normalizeMeeting(meeting);
     await closeCurrentMeetingWindow();
-    setCurrentMeeting(meeting);
+    setCurrentMeeting(normalizedMeeting);
     setCurrentMeetingMode("embedded");
     setSurfaceMode("current");
-    await saveCurrentMeetingCache(meeting);
-    await openExternalUrl(meeting.googleMeetUrl);
+    await saveCurrentMeetingCache(normalizedMeeting);
+    await openExternalUrl(normalizedMeeting.googleMeetUrl!);
   };
 
   const handleClearCurrentMeeting = async () => {
@@ -529,22 +589,106 @@ const App = () => {
     return saveMeetingGuide(session.token, meetingId, guide);
   };
 
-  const handleUnlockMeetingGuide = async (
-    meetingId: string,
-  ): Promise<AiMeetingGuideBinding> => {
-    if (!session) {
-      throw new Error("No active session");
+  const handleInstallUpdate = async (
+    updateOverride?: Extract<UpdateState, { update: unknown }>["update"],
+  ) => {
+    const update =
+      updateOverride ??
+      (updateState.status === "required" ||
+      updateState.status === "installing" ||
+      updateState.status === "error"
+        ? updateState.update
+        : null);
+
+    if (!update) {
+      return;
     }
 
-    return unlockMeetingGuide(session.token, meetingId);
+    setUpdateState({
+      status: "installing",
+      update,
+      progress: 0,
+      message: "Downloading update...",
+    });
+
+    try {
+      await installAppUpdate(update, (progress) => {
+        setUpdateState((current) =>
+          current.status === "installing"
+            ? {
+                ...current,
+                progress,
+                message:
+                  progress >= 1 ? "Installing update..." : "Downloading update...",
+              }
+            : current,
+        );
+      });
+    } catch (error) {
+      setUpdateState({
+        status: "error",
+        update,
+        progress: 0,
+        message:
+          error instanceof Error
+            ? error.message
+            : "Unable to install the latest approved release automatically.",
+      });
+    }
   };
 
-  // Local build fallback: bypass the blocking updater gate while we validate the rest of the app.
+  useEffect(() => {
+    if (!updaterEnabled) {
+      setUpdateState({ status: "ready" });
+      return;
+    }
+
+    let active = true;
+
+    const checkAndInstallUpdate = async () => {
+      setUpdateState({ status: "checking" });
+
+      const update = await checkForAppUpdate();
+
+      if (!active) {
+        return;
+      }
+
+      if (!update) {
+        setUpdateState({ status: "ready" });
+        return;
+      }
+
+      setUpdateState({
+        status: "required",
+        update,
+        progress: 0,
+        message: "Update found. Installing automatically...",
+      });
+
+      void handleInstallUpdate(update);
+    };
+
+    void checkAndInstallUpdate();
+
+    return () => {
+      active = false;
+    };
+  }, [updaterEnabled]);
+
+  if (updateState.status !== "ready") {
+    return (
+      <UpdateGate
+        onInstall={() => handleInstallUpdate()}
+        updateState={updateState}
+      />
+    );
+  }
 
   if (bootState === "loading") {
     return (
       <div className="splash-screen">
-        <div className="eyebrow">OpsUI Meetings</div>
+        <div className="eyebrow">OpsUI Meetings Dashboard</div>
         <h1>Loading workspace</h1>
         <p>Preparing cached meetings, session state, and release policy.</p>
       </div>
@@ -555,7 +699,7 @@ const App = () => {
     return (
       <div className="splash-screen">
         <div className="eyebrow">Startup issue</div>
-        <h1>OpsUI Meetings could not start</h1>
+        <h1>OpsUI Meetings Dashboard could not start</h1>
         <p>{bootError}</p>
       </div>
     );
@@ -592,7 +736,6 @@ const App = () => {
       onGenerateMeetingGuide={handleGenerateMeetingGuide}
       onLoadSavedMeetingGuide={handleLoadSavedMeetingGuide}
       onSaveMeetingGuide={handleSaveMeetingGuide}
-      onUnlockMeetingGuide={handleUnlockMeetingGuide}
       onResolveMeeting={handleResolveMeeting}
       onResetFilters={resetFilters}
       onSelectMeeting={setSelectedMeetingId}

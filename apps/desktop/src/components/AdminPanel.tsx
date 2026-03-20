@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import type { CreateUserInput, UpdateUserInput, User } from "@opsui/shared";
 import { getInitials } from "../lib/ui";
 import { SelectMenu } from "./SelectMenu";
@@ -69,6 +69,8 @@ export const AdminPanel = ({
     { value: "member", label: "Member" },
     { value: "admin", label: "Admin", dotColor: "#60A5FA" },
   ];
+  const activeUsers = users.filter((user) => user.active).length;
+  const adminUsers = users.filter((user) => user.role === "admin").length;
 
   useEffect(() => {
     setDrafts(buildDrafts(users));
@@ -151,6 +153,11 @@ export const AdminPanel = ({
     });
   };
 
+  const handleCreateSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    void handleCreate();
+  };
+
   return (
     <section className="admin-panel">
       <div className="admin-panel__header">
@@ -159,16 +166,25 @@ export const AdminPanel = ({
         <p className="admin-panel__sub">
           Manage approved OpsUI users, ownership colors, and internal credentials.
         </p>
+        <div className="admin-panel__meta">
+          <span>{activeUsers} active</span>
+          <span>{adminUsers} admins</span>
+          <span>{users.length} total</span>
+        </div>
       </div>
 
       <div className="admin-grid">
         <section className="admin-add">
           <div className="admin-add__label">Add new user</div>
+          <p className="admin-add__copy">
+            Create a new internal account, assign the operating role, and choose the ownership color shown across meeting queues.
+          </p>
 
-          <div className="admin-form">
+          <form className="admin-form" onSubmit={handleCreateSubmit}>
             <label>
               Full name
               <input
+                autoComplete="name"
                 className="admin-input"
                 onChange={(event) =>
                   setCreateForm((current) => ({
@@ -184,6 +200,7 @@ export const AdminPanel = ({
             <label>
               Username
               <input
+                autoComplete="username"
                 className="admin-input"
                 minLength={3}
                 onChange={(event) =>
@@ -200,6 +217,7 @@ export const AdminPanel = ({
             <label>
               Temporary password
               <input
+                autoComplete="new-password"
                 className="admin-input"
                 minLength={8}
                 onChange={(event) =>
@@ -251,12 +269,11 @@ export const AdminPanel = ({
             <button
               className="admin-add-btn"
               disabled={isBusy}
-              onClick={() => void handleCreate()}
-              type="button"
+              type="submit"
             >
               {isBusy ? "Working..." : "Add user"}
             </button>
-          </div>
+          </form>
         </section>
 
         <section className="admin-table-shell">
@@ -282,9 +299,13 @@ export const AdminPanel = ({
               const isDirty = isUserDraftDirty(user, draft);
 
               return (
-                <div
+                <form
                   className={`admin-table__row ${draft?.active ? "" : "admin-table__row--inactive"}`}
                   key={user.id}
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void handleSaveUser(user.id);
+                  }}
                 >
                   <div className="admin-user-cell">
                     <div
@@ -300,6 +321,7 @@ export const AdminPanel = ({
                     </div>
                     <div className="admin-user-copy">
                       <input
+                        autoComplete="name"
                         className="admin-input"
                         onChange={(event) =>
                           setDrafts((current) => ({
@@ -376,6 +398,7 @@ export const AdminPanel = ({
                   <div>
                     <input
                       className="admin-input"
+                      autoComplete="new-password"
                       onChange={(event) =>
                         setDrafts((current) => ({
                           ...current,
@@ -395,8 +418,7 @@ export const AdminPanel = ({
                     <button
                       className={`admin-action-btn ${isDirty ? "admin-action-btn--save-ready" : "admin-action-btn--neutral"}`}
                       disabled={isBusy || !isDirty}
-                      onClick={() => void handleSaveUser(user.id)}
-                      type="button"
+                      type="submit"
                     >
                       Save
                     </button>
@@ -404,7 +426,7 @@ export const AdminPanel = ({
                       className="admin-action-btn admin-action-btn--danger"
                       disabled={isBusy || user.id === currentUserId}
                       onClick={() => {
-                        if (window.confirm(`Remove ${user.displayName} from OpsUI Meetings?`)) {
+                        if (window.confirm(`Remove ${user.displayName} from OpsUI Meetings Dashboard?`)) {
                           void onDelete(user.id);
                         }
                       }}
@@ -414,7 +436,7 @@ export const AdminPanel = ({
                     </button>
                     {rowError ? <div className="form-error">{rowError}</div> : null}
                   </div>
-                </div>
+                </form>
               );
             })}
           </div>

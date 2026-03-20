@@ -21,6 +21,19 @@ type Props = {
   onOpenUrl: (url: string) => Promise<void>;
 };
 
+const getDescriptionLines = (raw: string) =>
+  raw
+    .split(/\r?\n+/)
+    .map((line) => line.trim())
+    .filter(
+      (line) =>
+        line &&
+        !line.toLowerCase().startsWith("drive brief notes") &&
+        !line.startsWith("http") &&
+        !/^-+$/.test(line) &&
+        !line.includes("MEET LINK"),
+    );
+
 export const MeetingDetailDrawer = ({
   meeting,
   users,
@@ -39,6 +52,7 @@ export const MeetingDetailDrawer = ({
   const typeTone = getMeetingTypeTone(meeting.meetingType);
   const activeAssignee =
     users.find((user) => user.id === meeting.assignedUserId) ?? null;
+  const descriptionLines = getDescriptionLines(meeting.descriptionRaw);
   const assigneeOptions = [
     {
       value: "",
@@ -63,6 +77,14 @@ export const MeetingDetailDrawer = ({
           <div className="detail-panel__subtitle">
             {meeting.clientName} - {meeting.company}
           </div>
+          <div className="detail-panel__chips">
+            <span className={`type-badge type-badge--${typeTone}`}>
+              {meeting.meetingType}
+            </span>
+            <span className="country-badge">
+              {getCountryFlag(meeting.country)} {getCountryLabel(meeting.country)}
+            </span>
+          </div>
         </div>
         <button className="icon-btn" onClick={onClose} type="button">
           Close
@@ -82,15 +104,11 @@ export const MeetingDetailDrawer = ({
         </div>
         <div className="detail-row">
           <span className="detail-label">Meeting type</span>
-          <span className={`type-badge type-badge--${typeTone}`}>
-            {meeting.meetingType}
-          </span>
+          <span className="detail-value">{meeting.meetingType}</span>
         </div>
         <div className="detail-row">
           <span className="detail-label">Country</span>
-          <span className="detail-value">
-            {getCountryFlag(meeting.country)} {getCountryLabel(meeting.country)}
-          </span>
+          <span className="detail-value">{getCountryLabel(meeting.country)}</span>
         </div>
       </div>
 
@@ -244,9 +262,17 @@ export const MeetingDetailDrawer = ({
 
       <div className="detail-section">
         <div className="detail-section__label">Event description</div>
-        <p className="detail-notes">
-          {meeting.descriptionRaw || "No description provided."}
-        </p>
+        <div className="detail-notes">
+          {descriptionLines.length ? (
+            descriptionLines.map((line, index) => (
+              <p className="detail-notes__line" key={`${line}-${index}`}>
+                {line}
+              </p>
+            ))
+          ) : (
+            <p className="detail-notes__line">No description provided.</p>
+          )}
+        </div>
       </div>
 
       {canResolve ? (

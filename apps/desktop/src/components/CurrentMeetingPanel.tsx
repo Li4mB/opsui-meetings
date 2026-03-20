@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { AiMeetingGuide, AiMeetingGuideBinding, Meeting } from "@opsui/shared";
 import {
   formatMeetingTimeChip,
@@ -17,7 +17,6 @@ type Props = {
     meetingId: string,
     guide: AiMeetingGuide,
   ) => Promise<AiMeetingGuideBinding>;
-  onUnlockGuide: (meetingId: string) => Promise<AiMeetingGuideBinding>;
 };
 
 const getNotes = (raw: string) =>
@@ -27,7 +26,9 @@ const getNotes = (raw: string) =>
     .filter(
       (line) =>
         line &&
+        !line.toLowerCase().startsWith("drive brief notes") &&
         !line.startsWith("http") &&
+        !/^-+$/.test(line) &&
         !line.includes("MEETING DETAILS") &&
         !line.includes("CLIENT INFORMATION") &&
         !line.includes("MODULES OF INTEREST") &&
@@ -42,13 +43,29 @@ export const CurrentMeetingPanel = ({
   onLoadSavedGuide,
   onOpenUrl,
   onSaveGuide,
-  onUnlockGuide,
 }: Props) => {
   const [guide, setGuide] = useState<AiMeetingGuide | null>(null);
   const [guideError, setGuideError] = useState<string | null>(null);
   const [isGeneratingGuide, setIsGeneratingGuide] = useState(false);
   const [isGuideBound, setIsGuideBound] = useState(false);
   const [isGuideBindingBusy, setIsGuideBindingBusy] = useState(false);
+  const [saveState, setSaveState] = useState<
+    "idle" | "saving" | "saved" | "resetting"
+  >("idle");
+  const saveHoldTimeoutRef = useRef<number | null>(null);
+  const saveResetTimeoutRef = useRef<number | null>(null);
+
+  const clearSaveAnimationTimers = () => {
+    if (saveHoldTimeoutRef.current) {
+      window.clearTimeout(saveHoldTimeoutRef.current);
+      saveHoldTimeoutRef.current = null;
+    }
+
+    if (saveResetTimeoutRef.current) {
+      window.clearTimeout(saveResetTimeoutRef.current);
+      saveResetTimeoutRef.current = null;
+    }
+  };
 
   useEffect(() => {
     setGuide(null);
@@ -56,7 +73,16 @@ export const CurrentMeetingPanel = ({
     setIsGeneratingGuide(false);
     setIsGuideBound(false);
     setIsGuideBindingBusy(false);
+    setSaveState("idle");
+    clearSaveAnimationTimers();
   }, [meeting?.id]);
+
+  useEffect(
+    () => () => {
+      clearSaveAnimationTimers();
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!meeting) {
@@ -93,7 +119,7 @@ export const CurrentMeetingPanel = ({
     return () => {
       active = false;
     };
-  }, [meeting?.id]);
+  }, [meeting?.id, onLoadSavedGuide]);
 
   if (!meeting) {
     return (
@@ -113,8 +139,16 @@ export const CurrentMeetingPanel = ({
   const notes = getNotes(meeting.descriptionRaw);
 
   const handleGenerateGuide = async () => {
+    const wasGuideBound = isGuideBound;
+
     setIsGeneratingGuide(true);
     setGuideError(null);
+    clearSaveAnimationTimers();
+    setSaveState("idle");
+
+    if (wasGuideBound) {
+      setIsGuideBound(false);
+    }
 
     try {
       const nextGuide = await onGenerateGuide(meeting.id);
@@ -126,36 +160,61 @@ export const CurrentMeetingPanel = ({
           ? error.message
           : "Unable to generate the AI meeting guide right now.",
       );
+
+      if (wasGuideBound) {
+        setIsGuideBound(true);
+      }
     } finally {
       setIsGeneratingGuide(false);
     }
   };
 
-  const handleToggleGuideBinding = async () => {
-    if (!meeting || !guide) {
+  const handleSaveGuide = async () => {
+    if (!guide) {
       return;
     }
 
     setIsGuideBindingBusy(true);
     setGuideError(null);
+    setSaveState("saving");
 
     try {
-      const binding = isGuideBound
-        ? await onUnlockGuide(meeting.id)
-        : await onSaveGuide(meeting.id, guide);
-
+      const binding = await onSaveGuide(meeting.id, guide);
       setGuide(binding.guide ?? guide);
       setIsGuideBound(binding.locked);
+      setSaveState("saved");
+      clearSaveAnimationTimers();
+
+      saveHoldTimeoutRef.current = window.setTimeout(() => {
+        setSaveState("resetting");
+        saveHoldTimeoutRef.current = null;
+
+        saveResetTimeoutRef.current = window.setTimeout(() => {
+          setSaveState("idle");
+          saveResetTimeoutRef.current = null;
+        }, 800);
+      }, 3000);
     } catch (error) {
       setGuideError(
         error instanceof Error
           ? error.message
           : "Unable to update the saved guide for this meeting.",
       );
+      setSaveState("idle");
     } finally {
       setIsGuideBindingBusy(false);
     }
   };
+
+  const showSavedTick = isGuideBound;
+  const isSaveAnimating =
+    saveState === "saving" || saveState === "saved" || saveState === "resetting";
+  const saveLabel =
+    saveState === "saving"
+      ? "Saving..."
+      : saveState === "saved" || saveState === "resetting"
+        ? "Saved"
+        : "Save";
 
   return (
     <section className="current-meeting-shell">
@@ -168,7 +227,7 @@ export const CurrentMeetingPanel = ({
               {meeting.clientName} - {meeting.company}
             </p>
           </div>
-          <span className="current-meeting-badge">Live context</span>
+          <span className="current-meeting-badge">LIVE</span>
         </div>
 
         <div className="current-meeting-hero-pills">
@@ -216,40 +275,62 @@ export const CurrentMeetingPanel = ({
                 <div className="current-meeting-ai-actions">
                   {guide ? (
                     <div className="current-meeting-ai-meta">
-                      {guide.model} · {formatSyncTimestamp(guide.generatedAt)}
+                      {guide.model} | {formatSyncTimestamp(guide.generatedAt)}
                     </div>
                   ) : null}
+
                   {guide ? (
-                    <div
-                      className={`current-meeting-lockbar ${isGuideBound ? "current-meeting-lockbar--locked" : ""} ${isGuideBindingBusy ? "current-meeting-lockbar--busy" : ""}`}
-                    >
-                      <button
-                        aria-label={isGuideBound ? "Unlock saved AI guide" : "Lock and save AI guide"}
-                        className={`current-meeting-lockbar__lock ${isGuideBound ? "current-meeting-lockbar__lock--locked" : ""}`}
-                        disabled={isGuideBindingBusy}
-                        onClick={() => void handleToggleGuideBinding()}
-                        title={
-                          isGuideBound
-                            ? "Unlock and remove the saved guide from this event"
-                            : "Lock and save this guide to the event"
-                        }
-                        type="button"
-                      >
+                    <div className="current-meeting-guide-actions">
+                      {showSavedTick ? (
                         <span
-                          aria-hidden="true"
-                          className={`current-meeting-lockbar__icon ${isGuideBound ? "current-meeting-lockbar__icon--locked" : ""}`}
+                          aria-label="Guide is saved"
+                          className="current-meeting-guide-saved-indicator"
+                          title="Guide is saved"
                         >
-                          {isGuideBound ? "🔒" : "🔓"}
+                          <span
+                            aria-hidden="true"
+                            className="current-meeting-guide-saved-indicator__check"
+                          />
                         </span>
-                      </button>
-                      <button
-                        className="current-meeting-lockbar__action"
-                        disabled={isGeneratingGuide || isGuideBound || isGuideBindingBusy}
-                        onClick={() => void handleGenerateGuide()}
-                        type="button"
+                      ) : null}
+
+                      <div
+                        className={`current-meeting-guide-pill ${saveState === "saving" ? "current-meeting-guide-pill--saving" : ""} ${saveState === "saved" ? "current-meeting-guide-pill--saved" : ""} ${saveState === "resetting" ? "current-meeting-guide-pill--resetting" : ""} ${isGuideBound && !isSaveAnimating ? "current-meeting-guide-pill--bound" : ""}`}
                       >
-                        {isGeneratingGuide ? "Generating..." : "Refresh Guide"}
-                      </button>
+                        <span className="current-meeting-guide-pill__fill" aria-hidden="true" />
+                        <button
+                          aria-label="Save AI meeting guide"
+                          className="current-meeting-guide-pill__action current-meeting-guide-pill__action--save"
+                          disabled={isGuideBound || isGuideBindingBusy || isSaveAnimating}
+                          onClick={() => void handleSaveGuide()}
+                          type="button"
+                        >
+                          {saveLabel === "Saved" ? (
+                            <span className="current-meeting-guide-pill__save-copy">
+                              <span
+                                className="current-meeting-guide-pill__check"
+                                aria-hidden="true"
+                              />
+                              <span>{saveLabel}</span>
+                            </span>
+                          ) : (
+                            <span className="current-meeting-guide-pill__save-copy">
+                              <span>{saveLabel}</span>
+                            </span>
+                          )}
+                        </button>
+
+                        <span className="current-meeting-guide-pill__divider" aria-hidden="true" />
+
+                        <button
+                          className="current-meeting-guide-pill__action current-meeting-guide-pill__action--refresh"
+                          disabled={isGeneratingGuide || isGuideBindingBusy}
+                          onClick={() => void handleGenerateGuide()}
+                          type="button"
+                        >
+                          {isGeneratingGuide ? "Generating..." : "Refresh Guide"}
+                        </button>
+                      </div>
                     </div>
                   ) : (
                     <button
@@ -302,7 +383,10 @@ export const CurrentMeetingPanel = ({
                           const color = getModuleColor(item.module);
 
                           return (
-                            <div className="current-meeting-ai-rows" key={`${item.module}-${item.reason}`}>
+                            <div
+                              className="current-meeting-ai-rows"
+                              key={`${item.module}-${item.reason}`}
+                            >
                               <span
                                 className="current-meeting-module"
                                 style={{
@@ -318,7 +402,9 @@ export const CurrentMeetingPanel = ({
                           );
                         })
                       ) : (
-                        <div className="current-meeting-empty">No module recommendations returned</div>
+                        <div className="current-meeting-empty">
+                          No module recommendations returned
+                        </div>
                       )}
                     </div>
                   </article>
@@ -328,13 +414,18 @@ export const CurrentMeetingPanel = ({
                     <div className="current-meeting-ai-stack">
                       {guide.objectionHandling.length ? (
                         guide.objectionHandling.map((item) => (
-                          <div className="current-meeting-ai-rows" key={`${item.objection}-${item.guidance}`}>
+                          <div
+                            className="current-meeting-ai-rows"
+                            key={`${item.objection}-${item.guidance}`}
+                          >
                             <strong>{item.objection}</strong>
                             <p>{item.guidance}</p>
                           </div>
                         ))
                       ) : (
-                        <div className="current-meeting-empty">No objections identified</div>
+                        <div className="current-meeting-empty">
+                          No objections identified
+                        </div>
                       )}
                     </div>
                   </article>
@@ -343,7 +434,10 @@ export const CurrentMeetingPanel = ({
                     <span className="eyebrow">Talk Track Steps</span>
                     <div className="current-meeting-ai-stack">
                       {guide.talkTrackSteps.map((item) => (
-                        <div className="current-meeting-ai-step" key={`${item.step}-${item.guidance}`}>
+                        <div
+                          className="current-meeting-ai-step"
+                          key={`${item.step}-${item.guidance}`}
+                        >
                           <div className="current-meeting-ai-step__index">{item.step}</div>
                           <p>{item.guidance}</p>
                         </div>
@@ -387,9 +481,11 @@ export const CurrentMeetingPanel = ({
                   <span>Company</span>
                   <strong>{meeting.company}</strong>
                 </div>
-                <div className="current-meeting-info-card">
+                <div className="current-meeting-info-card current-meeting-info-card--email">
                   <span>Email</span>
-                  <strong>{meeting.clientEmail ?? "Not provided"}</strong>
+                  <strong title={meeting.clientEmail ?? "Not provided"}>
+                    {meeting.clientEmail ?? "Not provided"}
+                  </strong>
                 </div>
                 <div className="current-meeting-info-card">
                   <span>Phone</span>
@@ -435,9 +531,7 @@ export const CurrentMeetingPanel = ({
               </div>
               <div className="current-meeting-notes">
                 {notes.length ? (
-                  notes.map((line, index) => (
-                    <p key={`${line}-${index}`}>{line}</p>
-                  ))
+                  notes.map((line, index) => <p key={`${line}-${index}`}>{line}</p>)
                 ) : (
                   <p>No additional notes were found in the synced brief.</p>
                 )}
@@ -459,7 +553,7 @@ export const CurrentMeetingPanel = ({
                     type="button"
                   >
                     <span>ME</span>
-                    <strong>Reopen Google Meet</strong>
+                    <strong>Join Meet</strong>
                   </button>
                 ) : null}
                 {meeting.googleDocUrl ? (

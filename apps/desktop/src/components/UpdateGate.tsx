@@ -11,8 +11,9 @@ export const UpdateGate = ({ updateState, onInstall }: Props) => {
       <div className="update-gate">
         <div className="update-card">
           <div className="eyebrow">Checking release channel</div>
-          <h1>Preparing OpsUI Meetings</h1>
+          <h1>Preparing OpsUI Meetings Dashboard</h1>
           <p>Verifying whether this installation is on the required version.</p>
+          <div className="update-meta">Checking for the latest approved release...</div>
         </div>
       </div>
     );
@@ -31,9 +32,10 @@ export const UpdateGate = ({ updateState, onInstall }: Props) => {
         <div className="eyebrow">Mandatory update</div>
         <h1>Version {version} is required to continue.</h1>
         <p>
-          Access is blocked until the latest approved OpsUI Meetings release is
+          Access is blocked until the latest approved OpsUI Meetings Dashboard release is
           installed.
         </p>
+        <div className="panel-badge">Required version {version}</div>
 
         {updateState.update.body ? (
           <div className="update-notes">{updateState.update.body}</div>

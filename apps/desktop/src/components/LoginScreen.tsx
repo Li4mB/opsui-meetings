@@ -1,4 +1,5 @@
 import { useState } from "react";
+import opsLogo from "../assets/op.png";
 
 type Props = {
   isLoading: boolean;
@@ -18,10 +19,16 @@ export const LoginScreen = ({ isLoading, error, onSubmit }: Props) => {
   return (
     <div className="login-shell">
       <section className="login-hero">
+        <div className="login-brand">
+          <span className="login-brand__mark">
+            <img alt="OpsUI logo" className="login-brand__image" src={opsLogo} />
+          </span>
+          <span className="login-brand__wordmark">OpsUI Meetings Dashboard</span>
+        </div>
         <div className="eyebrow">OpsUI Internal Platform</div>
         <h1>Meet every demo booking with the full picture.</h1>
         <p>
-          OpsUI Meetings gives the team a shared live calendar, fast assignment
+          OpsUI Meetings Dashboard gives the team a shared live calendar, fast assignment
           workflows, and offline access to recently synced bookings.
         </p>
 
@@ -73,7 +80,7 @@ export const LoginScreen = ({ isLoading, error, onSubmit }: Props) => {
           {error ? <div className="form-error">{error}</div> : null}
 
           <button className="primary-button" disabled={isLoading} type="submit">
-            {isLoading ? "Signing in..." : "Open OpsUI Meetings"}
+            {isLoading ? "Signing in..." : "Open OpsUI Meetings Dashboard"}
           </button>
         </form>
       </section>
