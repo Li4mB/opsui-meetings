@@ -87,9 +87,24 @@ The API sync logic reads:
 
 ### Current persistence
 
-The API stores state in:
+By default, the API stores state in:
 
 - `apps/api/data/opsui-meetings.sqlite`
+
+For production, set:
+
+- `OPSUI_DB_PATH=<absolute-path-to-persistent-disk>/opsui-meetings.sqlite`
+
+Example for a mounted persistent disk:
+
+- `OPSUI_DB_PATH=/var/data/opsui-meetings.sqlite`
+
+Without a persistent disk or explicit `OPSUI_DB_PATH`, a redeploy or instance replacement can create a fresh SQLite file. When that happens, server-managed state is lost, including:
+
+- approved users beyond the seeded admin
+- meeting assignments
+- `past_meetings` records used to keep resolved meetings out of the active list
+- sync metadata
 
 For team use, deploy the API on a shared host so all desktop clients see the same:
 

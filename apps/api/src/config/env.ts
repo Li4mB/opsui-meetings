@@ -36,5 +36,7 @@ export const env = {
   openAiVectorStoreId: process.env.OPSUI_OPENAI_VECTOR_STORE_ID ?? "",
   makeMeetingRequestWebhookUrl:
     process.env.OPSUI_MAKE_MEETING_REQUEST_WEBHOOK_URL ?? "",
-  dbPath: path.resolve(appRoot, "data", "opsui-meetings.sqlite"),
+  dbPath:
+    process.env.OPSUI_DB_PATH?.trim() ||
+    path.resolve(appRoot, "data", "opsui-meetings.sqlite"),
 };
