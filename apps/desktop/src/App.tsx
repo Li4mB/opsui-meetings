@@ -326,6 +326,35 @@ const App = () => {
           ? normalizeMeeting(cachedCurrentMeeting)
           : null;
 
+        let nextSession = cachedSession;
+
+        if (cachedSession) {
+          try {
+            const currentSession = await withTimeout(
+              getCurrentSessionUser(cachedSession.token),
+              null,
+            );
+
+            if (currentSession) {
+              nextSession = {
+                token: cachedSession.token,
+                user: currentSession.user,
+              };
+
+              await Promise.all([
+                saveSessionCache(nextSession),
+                saveStoredSession(nextSession),
+              ]);
+            }
+          } catch (error) {
+            if (error instanceof ApiError && error.status === 401) {
+              nextSession = null;
+              await Promise.all([clearSessionCache(), clearStoredSession()]);
+              setLoginError("Your session expired. Please sign in again.");
+            }
+          }
+        }
+
         startTransition(() => {
           setMeetings(
             normalizedCachedMeetings.meetings,
@@ -334,20 +363,20 @@ const App = () => {
           setPastMeetings(normalizedCachedPastMeetings.meetings);
           setCurrentMeeting(normalizedCachedCurrentMeeting);
           setUsers(cachedUsers);
-          setSession(cachedSession);
+          setSession(nextSession);
         });
 
-        if (cachedSession) {
+        if (nextSession) {
           void Promise.all([
-            saveSessionCache(cachedSession),
-            saveStoredSession(cachedSession),
+            saveSessionCache(nextSession),
+            saveStoredSession(nextSession),
           ]);
         }
 
         setBootState("ready");
 
-        if (cachedSession) {
-          void refreshWorkspace(cachedSession, { syncFirst: false, quiet: true });
+        if (nextSession) {
+          void refreshWorkspace(nextSession, { syncFirst: false, quiet: true });
         }
       } catch (error) {
         setBootError(
