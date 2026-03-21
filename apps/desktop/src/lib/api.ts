@@ -17,8 +17,12 @@ import {
   userSchema,
 } from "@opsui/shared";
 
+const DEFAULT_API_BASE_URL = import.meta.env.DEV
+  ? "http://localhost:8787"
+  : "https://opsui-meetings.onrender.com";
+
 const API_BASE_URL =
-  import.meta.env.VITE_OPSUI_API_BASE_URL ?? "http://localhost:8787";
+  import.meta.env.VITE_OPSUI_API_BASE_URL ?? DEFAULT_API_BASE_URL;
 
 const buildCandidateApiBaseUrls = () => {
   const urls = [API_BASE_URL];
