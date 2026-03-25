@@ -49,6 +49,13 @@ const buildServer = async () => {
   app.setErrorHandler((error: unknown, _request, reply) => {
     const appError =
       error instanceof Error ? error : new Error("Unexpected server error");
+    const statusCode =
+      typeof error === "object" &&
+      error !== null &&
+      "statusCode" in error &&
+      typeof error.statusCode === "number"
+        ? error.statusCode
+        : 500;
     const hasValidation =
       typeof error === "object" && error !== null && "validation" in error;
 
@@ -67,8 +74,11 @@ const buildServer = async () => {
       return reply.badRequest(message || "Invalid request payload");
     }
 
-    app.log.error(appError);
-    return reply.status(500).send({ message: appError.message });
+    if (statusCode >= 500) {
+      app.log.error(appError);
+    }
+
+    return reply.status(statusCode).send({ message: appError.message });
   });
 
   return app;
