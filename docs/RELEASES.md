@@ -1,26 +1,40 @@
 # OpsUI Meetings Releases
 
-## Release Flow
+## Release flow
 
 OpsUI Meetings uses Tauri's updater flow with:
 
-- a signed Windows installer
-- a `.sig` signature file
-- a remote update endpoint configured in [tauri.conf.json](C:/Users/daabo/OneDrive/Documents/OpsUI/opsui-meetings/apps/desktop/src-tauri/tauri.conf.json)
+- signed updater artifacts
+- platform-specific manifests for current builds
+- a legacy Windows manifest for already-installed Windows clients
+- GitHub Releases as the distribution endpoint
 
-The app blocks normal access when an update is detected and installs the update before relaunching.
+The desktop app blocks normal access when an update is detected and installs the approved release before relaunching.
+
+## Manifest strategy
+
+New desktop builds check:
+
+1. `https://github.com/opsui/opsui-meetings/releases/latest/download/{{target}}-{{arch}}.json`
+2. `https://github.com/opsui/opsui-meetings/releases/latest/download/latest.json`
+
+Current manifests:
+
+- `windows-x86_64.json`
+- `darwin-aarch64.json`
+- `latest.json`
+  - maintained for older Windows installs that already shipped with the original single-manifest endpoint
 
 ## Automated publishing
 
-This repo now includes [publish-desktop-update.yml](C:/Users/daabo/OneDrive/Documents/OpsUI/opsui-meetings/.github/workflows/publish-desktop-update.yml), which:
+The workflow at [`/.github/workflows/publish-desktop-update.yml`](../.github/workflows/publish-desktop-update.yml):
 
-1. runs on every push to `main`
-2. assigns the desktop build a monotonically increasing version based on the GitHub Actions run number
-3. builds a signed Windows installer
-4. generates `latest.json`
-5. publishes the installer, signature, and manifest to a GitHub Release
-
-The desktop app checks that release feed on startup and automatically installs any newer approved release before launching the workspace.
+1. calculates a desktop build version from the package minor version and the GitHub Actions run number
+2. optionally waits for the API healthcheck
+3. builds signed Windows artifacts
+4. builds signed macOS artifacts
+5. generates updater manifests for each platform
+6. publishes all assets to one GitHub Release
 
 ### Required GitHub secrets
 
@@ -31,79 +45,59 @@ The desktop app checks that release feed on startup and automatically installs a
 
 - `RENDER_HEALTHCHECK_URL`
 
-If `RENDER_HEALTHCHECK_URL` is set, the workflow waits for that endpoint to return a successful response before publishing the desktop release. This is the cleanest way in this repo to keep desktop updates aligned with a healthy Render deployment.
+If `RENDER_HEALTHCHECK_URL` is set, the workflow waits for that endpoint to return success before publishing desktop artifacts.
 
-## One-time setup
+## One-time updater setup
 
-### 1. Generate a permanent updater keypair
+Generate a permanent updater keypair:
 
-```powershell
-npx tauri signer generate -- --ci -w "$env:USERPROFILE\.tauri\opsui-meetings.key" -p "<strong-password>"
+```sh
+npx tauri signer generate -- --ci -w "$HOME/.tauri/opsui-meetings.key" -p "<strong-password>"
 ```
 
-### 2. Put the public key in Tauri config
+Store the public key in [`apps/desktop/src-tauri/tauri.conf.json`](../apps/desktop/src-tauri/tauri.conf.json) under `plugins.updater.pubkey`.
 
-Update:
+Store the private key securely in CI as:
 
-- [tauri.conf.json](C:/Users/daabo/OneDrive/Documents/OpsUI/opsui-meetings/apps/desktop/src-tauri/tauri.conf.json)
-
-Field:
-
-- `plugins.updater.pubkey`
-
-### 3. Store the private key securely
-
-Use CI/CD or user environment variables for:
-
-- `TAURI_SIGNING_PRIVATE_KEY_PATH`
+- `TAURI_SIGNING_PRIVATE_KEY`
 - `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
 
-## Build command
+## Local signed build commands
 
-From `apps/desktop`:
+Windows:
 
 ```powershell
-$env:TAURI_SIGNING_PRIVATE_KEY_PATH = "$env:USERPROFILE\.tauri\opsui-meetings-dashboard.key"
+$env:TAURI_SIGNING_PRIVATE_KEY_PATH = "$env:USERPROFILE\.tauri\opsui-meetings.key"
 $env:TAURI_SIGNING_PRIVATE_KEY_PASSWORD = "<password>"
-npm run build:signed
+npm run build:desktop:windows
 ```
 
-## Artifacts to publish
+macOS:
 
-From `apps/desktop/src-tauri/target/release/bundle/nsis`:
+```sh
+export TAURI_SIGNING_PRIVATE_KEY_PATH="$HOME/.tauri/opsui-meetings.key"
+export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="<password>"
+npm run build:desktop:macos
+```
+
+## Published artifacts
+
+Windows:
 
 - `OpsUI Meetings Dashboard_<version>_x64-setup.exe`
 - `OpsUI Meetings Dashboard_<version>_x64-setup.exe.sig`
+- `windows-x86_64.json`
+- `latest.json`
 
-## Static update manifest
+macOS:
 
-The desktop app can use a static `latest.json` file hosted on GitHub Releases or another HTTPS endpoint.
-
-Example manifest:
-
-```json
-{
-  "version": "0.1.0",
-  "notes": "Initial internal OpsUI Meetings Dashboard release",
-  "pub_date": "2026-03-14T00:00:00Z",
-  "platforms": {
-    "windows-x86_64": {
-      "signature": "CONTENTS OF THE .sig FILE",
-      "url": "https://github.com/opsui/opsui-meetings/releases/download/v0.1.0/OpsUI%20Meetings%20Dashboard_0.1.0_x64-setup.exe"
-    }
-  }
-}
-```
-
-## Recommended publishing flow
-
-1. Push to `main`.
-2. Let Render complete a healthy deploy.
-3. Let the GitHub Action publish the signed installer, `.sig`, and `latest.json`.
-4. Launch an existing desktop install and confirm it auto-downloads the newer release.
+- `OpsUI Meetings Dashboard.app.tar.gz`
+- `OpsUI Meetings Dashboard.app.tar.gz.sig`
+- `darwin-aarch64.json`
 
 ## Notes
 
-- The updater only works with signed artifacts.
-- Keep the same private key across releases.
-- If the private key changes, already-installed clients will reject future updates.
+- Keep the same updater private key across releases.
+- If the updater private key changes, existing installs will reject future updates.
+- macOS release automation currently publishes the `.app.tar.gz` updater artifact rather than a DMG to avoid Finder/AppleScript DMG hangs in automation.
+- Apple code signing and notarization are still needed before public rollout.

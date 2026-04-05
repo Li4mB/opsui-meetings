@@ -1,7 +1,14 @@
-import { startTransition, useDeferredValue, useEffect, useState } from "react";
+import {
+  startTransition,
+  useDeferredValue,
+  useEffect,
+  useEffectEvent,
+  useState,
+} from "react";
 import type {
   AiMeetingGuideBinding,
   AiMeetingGuide,
+  AuthBootstrapUser,
   CreateMeetingRequestInput,
   CreateUserInput,
   LoginInput,
@@ -18,6 +25,7 @@ import {
   createUser,
   deleteUser,
   generateMeetingGuide,
+  getAuthBootstrap,
   getCurrentSessionUser,
   getSavedMeetingGuide,
   getMeetings,
@@ -111,6 +119,7 @@ const App = () => {
   const [bootError, setBootError] = useState<string | null>(null);
   const [loginError, setLoginError] = useState<string | null>(null);
   const [loggingIn, setLoggingIn] = useState(false);
+  const [approvedUsers, setApprovedUsers] = useState<AuthBootstrapUser[]>([]);
   const [updateState, setUpdateState] = useState<UpdateState>(
     updaterEnabled ? { status: "checking" } : { status: "ready" },
   );
@@ -277,6 +286,7 @@ const App = () => {
       );
     }
   };
+  const refreshWorkspaceEvent = useEffectEvent(refreshWorkspace);
 
   useEffect(() => {
     let active = true;
@@ -289,6 +299,7 @@ const App = () => {
           cachedCurrentMeeting,
           cachedUsers,
           cachedSession,
+          authBootstrap,
         ] =
           await Promise.all([
             withTimeout(loadMeetingsCache(), {
@@ -308,6 +319,7 @@ const App = () => {
               })(),
               null,
             ),
+            withTimeout(getAuthBootstrap(), { users: [] }),
           ]);
 
         if (!active) {
@@ -364,6 +376,7 @@ const App = () => {
           setCurrentMeeting(normalizedCachedCurrentMeeting);
           setUsers(cachedUsers);
           setSession(nextSession);
+          setApprovedUsers(authBootstrap.users);
         });
 
         if (nextSession) {
@@ -376,7 +389,10 @@ const App = () => {
         setBootState("ready");
 
         if (nextSession) {
-          void refreshWorkspace(nextSession, { syncFirst: false, quiet: true });
+          void refreshWorkspaceEvent(nextSession, {
+            syncFirst: false,
+            quiet: true,
+          });
         }
       } catch (error) {
         setBootError(
@@ -665,6 +681,7 @@ const App = () => {
       });
     }
   };
+  const handleInstallUpdateEvent = useEffectEvent(handleInstallUpdate);
 
   useEffect(() => {
     if (!updaterEnabled) {
@@ -695,7 +712,7 @@ const App = () => {
         message: "Update found. Installing automatically...",
       });
 
-      void handleInstallUpdate(update);
+      void handleInstallUpdateEvent(update);
     };
 
     void checkAndInstallUpdate();
@@ -737,6 +754,7 @@ const App = () => {
   if (!session) {
     return (
       <LoginScreen
+        approvedUsers={approvedUsers}
         error={loginError}
         isLoading={loggingIn}
         onSubmit={handleLogin}

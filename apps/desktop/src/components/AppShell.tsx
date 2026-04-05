@@ -194,6 +194,9 @@ export const AppShell = ({
         }
       : null,
   ].filter(Boolean) as Array<{ label: string; onClear: () => void }>;
+  const adminPanelKey = users
+    .map((user) => `${user.id}:${user.updatedAt}:${user.active ? "1" : "0"}`)
+    .join("|");
 
   useEffect(() => {
     if (!selectedMeeting) {
@@ -289,42 +292,44 @@ export const AppShell = ({
             </div>
           ) : null}
 
-          <div className="meta-pill">TZ {viewerTimeZone}</div>
-          <div className={`sync-indicator ${syncIndicatorTone}`}>
-            <span className="sync-indicator__dot" />
-            <span className="sync-indicator__label">{syncIndicatorLabel}</span>
-          </div>
-
-          <button
-            className="header-action-button header-action-button--primary"
-            onClick={() => void onSync()}
-            type="button"
-          >
-            {syncStatus === "syncing" ? "Syncing..." : "Sync"}
-          </button>
-          <button
-            className="header-action-button"
-            onClick={() => void onLogout()}
-            type="button"
-          >
-            Sign out
-          </button>
-
-          <div className="header-user">
-            <div
-              className="avatar"
-              style={{
-                width: 34,
-                height: 34,
-                background: session.user.colorHex,
-                fontSize: 13,
-              }}
-            >
-              {getInitials(session.user.displayName)}
+          <div className="header-controls">
+            <div className="meta-pill">TZ {viewerTimeZone}</div>
+            <div className={`sync-indicator ${syncIndicatorTone}`}>
+              <span className="sync-indicator__dot" />
+              <span className="sync-indicator__label">{syncIndicatorLabel}</span>
             </div>
-            <div className="header-user__info">
-              <span className="header-user__name">{session.user.displayName}</span>
-              <span className="header-user__role">{session.user.role}</span>
+
+            <button
+              className="header-action-button header-action-button--primary"
+              onClick={() => void onSync()}
+              type="button"
+            >
+              {syncStatus === "syncing" ? "Syncing..." : "Sync"}
+            </button>
+            <button
+              className="header-action-button"
+              onClick={() => void onLogout()}
+              type="button"
+            >
+              Sign out
+            </button>
+
+            <div className="header-user">
+              <div
+                className="avatar"
+                style={{
+                  width: 34,
+                  height: 34,
+                  background: session.user.colorHex,
+                  fontSize: 13,
+                }}
+              >
+                {getInitials(session.user.displayName)}
+              </div>
+              <div className="header-user__info">
+                <span className="header-user__name">{session.user.displayName}</span>
+                <span className="header-user__role">{session.user.role}</span>
+              </div>
             </div>
           </div>
         </div>
@@ -564,6 +569,7 @@ export const AppShell = ({
         <main className="main-content">
           {activeSurfaceMode === "admin" ? (
             <AdminPanel
+              key={adminPanelKey}
               currentUserId={session.user.id}
               isBusy={syncStatus === "syncing"}
               onCreate={onCreateUser}

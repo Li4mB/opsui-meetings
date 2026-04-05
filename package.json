@@ -10,6 +10,10 @@
     "build": "npm run build --workspaces --if-present",
     "dev:api": "npm run dev --workspace @opsui/api",
     "dev:desktop": "npm run dev --workspace @opsui/desktop",
+    "dev:desktop:tauri": "npm run dev:tauri --workspace @opsui/desktop",
+    "build:desktop": "npm run build:desktop --workspace @opsui/desktop",
+    "build:desktop:windows": "npm run build:desktop:windows --workspace @opsui/desktop",
+    "build:desktop:macos": "npm run build:desktop:macos --workspace @opsui/desktop",
     "lint": "npm run lint --workspaces --if-present"
   }
 }

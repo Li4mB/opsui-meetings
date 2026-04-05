@@ -1,13 +1,15 @@
 import { useState } from "react";
+import type { AuthBootstrapUser } from "@opsui/shared";
 import opsLogo from "../assets/op.png";
 
 type Props = {
+  approvedUsers: AuthBootstrapUser[];
   isLoading: boolean;
   error: string | null;
   onSubmit: (input: { username: string; password: string }) => Promise<void>;
 };
 
-export const LoginScreen = ({ isLoading, error, onSubmit }: Props) => {
+export const LoginScreen = ({ approvedUsers, isLoading, error, onSubmit }: Props) => {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
 
@@ -52,8 +54,34 @@ export const LoginScreen = ({ isLoading, error, onSubmit }: Props) => {
         <div className="panel-badge">Approved OpsUI users only</div>
         <h2>Sign in</h2>
         <p className="panel-copy">
-          Use your internal OpsUI username and password to continue.
+          Use your internal OpsUI username and password to continue. If you are signing in on
+          a new machine, choose your username from the approved account list below.
         </p>
+
+        {approvedUsers.length ? (
+          <div className="login-directory">
+            <div className="login-directory__label">Approved accounts</div>
+            <div className="login-directory__list">
+              {approvedUsers.map((user) => (
+                <button
+                  className={`login-directory__item ${username === user.username ? "login-directory__item--active" : ""}`}
+                  key={user.username}
+                  onClick={() => setUsername(user.username)}
+                  type="button"
+                >
+                  <span
+                    className="login-directory__dot"
+                    style={{ background: user.colorHex }}
+                  />
+                  <span className="login-directory__copy">
+                    <span className="login-directory__name">{user.displayName}</span>
+                    <span className="login-directory__username">@{user.username}</span>
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
 
         <form className="login-form" onSubmit={handleSubmit}>
           <label>

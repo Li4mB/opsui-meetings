@@ -1,51 +1,87 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import process from "node:process";
+import {
+  detectHostUpdaterPlatformKey,
+  getUpdaterArtifactConfig,
+} from "./lib/desktop-release.mjs";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const desktopRoot = path.resolve(__dirname, "..");
+const readArgumentValue = (name) => {
+  const flag = `--${name}`;
+  const index = process.argv.indexOf(flag);
 
-const version = process.argv[2];
-const repository = process.argv[3] ?? process.env.GITHUB_REPOSITORY ?? "opsui/opsui-meetings";
-const releaseTag = process.argv[4] ?? `v${version}`;
-const bundleDir =
-  process.argv[5] ??
-  path.join(desktopRoot, "src-tauri", "target", "release", "bundle", "nsis");
+  if (index === -1) {
+    return null;
+  }
+
+  return process.argv[index + 1] ?? null;
+};
+
+const hasFlag = (name) => process.argv.includes(`--${name}`);
+
+const version = readArgumentValue("version");
+const platformKey = readArgumentValue("platform-key") ?? detectHostUpdaterPlatformKey();
+const repository =
+  readArgumentValue("repository") ??
+  process.env.GITHUB_REPOSITORY ??
+  "opsui/opsui-meetings";
+const releaseTag = readArgumentValue("release-tag") ?? (version ? `v${version}` : null);
+const notes =
+  readArgumentValue("notes") ?? (version ? `Automated desktop update for ${version}` : null);
+const config = getUpdaterArtifactConfig(platformKey);
+const bundleDir = path.resolve(readArgumentValue("bundle-dir") ?? config.bundleDir);
 
 if (!version) {
-  throw new Error("Usage: node generate-updater-manifest.mjs <version> [repository] [releaseTag] [bundleDir]");
+  throw new Error(
+    "Usage: node generate-updater-manifest.mjs --version <version> [--platform-key <os-arch>] [--repository <owner/repo>] [--release-tag <tag>] [--bundle-dir <dir>] [--write-legacy-windows-manifest]",
+  );
+}
+
+if (!releaseTag || !notes) {
+  throw new Error("Version is required to generate updater manifests.");
+}
+
+if (!fs.existsSync(bundleDir)) {
+  throw new Error(`Bundle directory not found at ${bundleDir}`);
 }
 
 const bundleEntries = fs.readdirSync(bundleDir);
-const installerName = bundleEntries.find((entry) => /-setup\.exe$/i.test(entry));
+const assetName = bundleEntries
+  .filter((entry) => config.fileMatcher.test(entry))
+  .sort(
+    (left, right) =>
+      fs.statSync(path.join(bundleDir, right)).mtimeMs -
+      fs.statSync(path.join(bundleDir, left)).mtimeMs,
+  )[0];
 
-if (!installerName) {
-  throw new Error(`Unable to find NSIS installer in ${bundleDir}`);
+if (!assetName) {
+  throw new Error(`Unable to find an updater artifact for ${platformKey} in ${bundleDir}`);
 }
 
-const signaturePath = path.join(bundleDir, `${installerName}.sig`);
+const signaturePath = path.join(bundleDir, `${assetName}.sig`);
 
 if (!fs.existsSync(signaturePath)) {
-  throw new Error(`Signature file not found for ${installerName}`);
+  throw new Error(`Signature file not found for ${assetName}`);
 }
-
-const signature = fs.readFileSync(signaturePath, "utf8").trim();
-const encodedInstallerName = encodeURIComponent(installerName);
 
 const manifest = {
   version,
-  notes: `Automated desktop update for ${version}`,
+  notes,
   pub_date: new Date().toISOString(),
   platforms: {
-    "windows-x86_64": {
-      signature,
-      url: `https://github.com/${repository}/releases/download/${releaseTag}/${encodedInstallerName}`,
+    [platformKey]: {
+      signature: fs.readFileSync(signaturePath, "utf8").trim(),
+      url: `https://github.com/${repository}/releases/download/${releaseTag}/${encodeURIComponent(assetName)}`,
     },
   },
 };
 
-const outputPath = path.join(bundleDir, "latest.json");
-fs.writeFileSync(outputPath, `${JSON.stringify(manifest, null, 2)}\n`);
+const manifestPath = path.join(bundleDir, config.manifestName);
+fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+console.log(`Updater manifest written to ${manifestPath}`);
 
-console.log(`Updater manifest written to ${outputPath}`);
+if (hasFlag("write-legacy-windows-manifest") && config.legacyManifestName) {
+  const legacyManifestPath = path.join(bundleDir, config.legacyManifestName);
+  fs.writeFileSync(legacyManifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  console.log(`Legacy updater manifest written to ${legacyManifestPath}`);
+}

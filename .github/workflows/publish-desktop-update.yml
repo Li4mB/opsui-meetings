@@ -9,8 +9,69 @@ permissions:
   contents: write
 
 jobs:
-  publish:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+      tag: ${{ steps.version.outputs.tag }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Calculate desktop release version
+        id: version
+        run: |
+          base_version="$(node -p "require('./apps/desktop/package.json').version")"
+          IFS='.' read -r major minor patch <<< "$base_version"
+
+          if [ -z "$major" ] || [ -z "$minor" ]; then
+            echo "Desktop version must be semver-like (major.minor.patch)." >&2
+            exit 1
+          fi
+
+          build_version="${major}.${minor}.${{ github.run_number }}"
+          {
+            echo "value=$build_version"
+            echo "tag=v$build_version"
+          } >> "$GITHUB_OUTPUT"
+
+  wait_for_render:
+    runs-on: ubuntu-latest
+    needs: prepare
+    if: ${{ secrets.RENDER_HEALTHCHECK_URL != '' }}
+
+    steps:
+      - name: Wait for Render healthcheck
+        env:
+          HEALTH_URL: ${{ secrets.RENDER_HEALTHCHECK_URL }}
+        run: |
+          deadline=$(( $(date +%s) + 900 ))
+
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            if curl --fail --silent --show-error --max-time 20 "$HEALTH_URL" >/dev/null; then
+              echo "Render healthcheck passed."
+              exit 0
+            fi
+
+            echo "Render healthcheck not ready yet. Waiting..."
+            sleep 20
+          done
+
+          echo "Render healthcheck did not become healthy before timeout." >&2
+          exit 1
+
+  build_windows:
     runs-on: windows-latest
+    needs:
+      - prepare
+      - wait_for_render
+    if: ${{ !cancelled() && needs.prepare.result == 'success' && (needs.wait_for_render.result == 'success' || needs.wait_for_render.result == 'skipped') }}
 
     steps:
       - name: Check out repository
@@ -28,73 +89,144 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Calculate desktop release version
-        id: version
-        shell: pwsh
-        run: |
-          $baseVersion = node -p "require('./apps/desktop/package.json').version"
-          $parts = $baseVersion.Trim().Split('.')
-
-          if ($parts.Length -lt 2) {
-            throw "Desktop version must be semver-like (major.minor.patch)."
-          }
-
-          $buildVersion = "$($parts[0]).$($parts[1]).${{ github.run_number }}"
-          "value=$buildVersion" >> $env:GITHUB_OUTPUT
-          "tag=v$buildVersion" >> $env:GITHUB_OUTPUT
-
       - name: Sync desktop version files
-        run: node ./apps/desktop/scripts/set-build-version.mjs "${{ steps.version.outputs.value }}"
-
-      - name: Wait for Render healthcheck
-        if: ${{ secrets.RENDER_HEALTHCHECK_URL != '' }}
-        shell: pwsh
-        run: |
-          $healthUrl = "${{ secrets.RENDER_HEALTHCHECK_URL }}"
-          $deadline = (Get-Date).AddMinutes(15)
-
-          while ((Get-Date) -lt $deadline) {
-            try {
-              $response = Invoke-WebRequest -Uri $healthUrl -UseBasicParsing -TimeoutSec 20
-
-              if ($response.StatusCode -ge 200 -and $response.StatusCode -lt 300) {
-                Write-Host "Render healthcheck passed."
-                exit 0
-              }
-            } catch {
-              Write-Host "Render healthcheck not ready yet. Waiting..."
-            }
-
-            Start-Sleep -Seconds 20
-          }
-
-          throw "Render healthcheck did not become healthy before timeout."
+        run: node ./apps/desktop/scripts/set-build-version.mjs "${{ needs.prepare.outputs.version }}"
 
       - name: Write Tauri signing key
-        shell: pwsh
-        run: |
-          $keyPath = Join-Path $env:RUNNER_TEMP "tauri-signing.key"
-          [System.IO.File]::WriteAllText($keyPath, $env:TAURI_SIGNING_PRIVATE_KEY)
-
-          "TAURI_SIGNING_PRIVATE_KEY_PATH=$keyPath" >> $env:GITHUB_ENV
+        shell: bash
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          key_path="$RUNNER_TEMP/tauri-signing.key"
+          printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" > "$key_path"
+          echo "TAURI_SIGNING_PRIVATE_KEY_PATH=$key_path" >> "$GITHUB_ENV"
 
-      - name: Build signed desktop release
-        run: npm run build:signed --workspace @opsui/desktop
+      - name: Build signed Windows desktop release
+        run: npm run build:desktop:windows --workspace @opsui/desktop
         env:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
 
-      - name: Generate updater manifest
-        run: node ./apps/desktop/scripts/generate-updater-manifest.mjs "${{ steps.version.outputs.value }}" "${{ github.repository }}" "${{ steps.version.outputs.tag }}"
+      - name: Generate Windows updater manifests
+        run: >
+          node ./apps/desktop/scripts/generate-updater-manifest.mjs
+          --version "${{ needs.prepare.outputs.version }}"
+          --platform-key windows-x86_64
+          --repository "${{ github.repository }}"
+          --release-tag "${{ needs.prepare.outputs.tag }}"
+          --write-legacy-windows-manifest
+
+      - name: Upload Windows release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-release-windows
+          path: |
+            apps/desktop/src-tauri/target/release/bundle/nsis/*.exe
+            apps/desktop/src-tauri/target/release/bundle/nsis/*.sig
+            apps/desktop/src-tauri/target/release/bundle/nsis/windows-x86_64.json
+            apps/desktop/src-tauri/target/release/bundle/nsis/latest.json
+
+  build_macos:
+    runs-on: macos-latest
+    needs:
+      - prepare
+      - wait_for_render
+    if: ${{ !cancelled() && needs.prepare.result == 'success' && (needs.wait_for_render.result == 'success' || needs.wait_for_render.result == 'skipped') }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          cache: npm
+          node-version: 22
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Sync desktop version files
+        run: node ./apps/desktop/scripts/set-build-version.mjs "${{ needs.prepare.outputs.version }}"
+
+      - name: Write Tauri signing key
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          key_path="$RUNNER_TEMP/tauri-signing.key"
+          printf '%s' "$TAURI_SIGNING_PRIVATE_KEY" > "$key_path"
+          echo "TAURI_SIGNING_PRIVATE_KEY_PATH=$key_path" >> "$GITHUB_ENV"
+
+      - name: Build signed macOS desktop release
+        run: npm run build:desktop:macos --workspace @opsui/desktop
+        env:
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
+      - name: Generate macOS updater manifest
+        run: >
+          node ./apps/desktop/scripts/generate-updater-manifest.mjs
+          --version "${{ needs.prepare.outputs.version }}"
+          --repository "${{ github.repository }}"
+          --release-tag "${{ needs.prepare.outputs.tag }}"
+
+      - name: Upload macOS release assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-release-macos
+          path: |
+            apps/desktop/src-tauri/target/release/bundle/macos/*.app.tar.gz
+            apps/desktop/src-tauri/target/release/bundle/macos/*.sig
+            apps/desktop/src-tauri/target/release/bundle/macos/*.json
+
+  publish_windows:
+    runs-on: ubuntu-latest
+    needs:
+      - prepare
+      - build_windows
+    if: ${{ !cancelled() && needs.prepare.result == 'success' && needs.build_windows.result == 'success' }}
+
+    steps:
+      - name: Download Windows release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: desktop-release-windows
+          path: release-assets/windows
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.version.outputs.tag }}
-          name: OpsUI Meetings Dashboard ${{ steps.version.outputs.value }}
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          name: OpsUI Meetings Dashboard ${{ needs.prepare.outputs.version }}
           generate_release_notes: true
           files: |
-            apps/desktop/src-tauri/target/release/bundle/nsis/*.exe
-            apps/desktop/src-tauri/target/release/bundle/nsis/*.sig
-            apps/desktop/src-tauri/target/release/bundle/nsis/latest.json
+            release-assets/windows/**/*.exe
+            release-assets/windows/**/*.sig
+            release-assets/windows/**/*.json
+
+  publish_macos:
+    runs-on: ubuntu-latest
+    needs:
+      - prepare
+      - build_macos
+      - publish_windows
+    if: ${{ !cancelled() && needs.prepare.result == 'success' && needs.publish_windows.result == 'success' && needs.build_macos.result == 'success' }}
+
+    steps:
+      - name: Download macOS release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: desktop-release-macos
+          path: release-assets/macos
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          name: OpsUI Meetings Dashboard ${{ needs.prepare.outputs.version }}
+          generate_release_notes: false
+          files: |
+            release-assets/macos/**/*.app.tar.gz
+            release-assets/macos/**/*.sig
+            release-assets/macos/**/*.json

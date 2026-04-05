@@ -3,7 +3,7 @@ import {
   meetingRequestSchema,
 } from "@opsui/shared";
 import { nanoid } from "nanoid";
-import { db } from "../db/database.js";
+import { storage } from "../db/database.js";
 import { env } from "../config/env.js";
 import { authenticateRequest } from "./auth.js";
 import type { DbMeetingRequestRow } from "../types.js";
@@ -128,47 +128,24 @@ export const registerMeetingRequestRoutes = (
       const createdAt = new Date().toISOString();
       const id = nanoid();
 
-      db.prepare(
-        `
-          INSERT INTO meeting_requests (
-            id,
-            client_name,
-            email,
-            phone,
-            company_name,
-            country,
-            business_size,
-            modules_json,
-            meeting_mode,
-            preferred_date,
-            preferred_time,
-            additional_info,
-            created_by_user_id,
-            created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `,
-      ).run(
+      await storage.insertMeetingRequest({
         id,
-        input.clientName,
-        input.email,
-        input.phone,
-        input.companyName,
-        input.country,
-        input.businessSize,
-        JSON.stringify(input.modules),
-        input.meetingMode,
-        input.preferredDate,
-        input.preferredTime,
-        input.additionalInfo,
-        currentUser.id,
-        createdAt,
-      );
+        client_name: input.clientName,
+        email: input.email,
+        phone: input.phone,
+        company_name: input.companyName,
+        country: input.country,
+        business_size: input.businessSize,
+        modules_json: JSON.stringify(input.modules),
+        meeting_mode: input.meetingMode,
+        preferred_date: input.preferredDate,
+        preferred_time: input.preferredTime,
+        additional_info: input.additionalInfo,
+        created_by_user_id: currentUser.id,
+        created_at: createdAt,
+      } satisfies DbMeetingRequestRow);
 
-      const row = db
-        .prepare<unknown[], DbMeetingRequestRow>(
-          "SELECT * FROM meeting_requests WHERE id = ? LIMIT 1",
-        )
-        .get(id);
+      const row = await storage.findMeetingRequestById(id);
 
       if (!row) {
         return reply.status(500).send({
@@ -186,7 +163,7 @@ export const registerMeetingRequestRoutes = (
           role: currentUser.role,
         });
       } catch (error) {
-        db.prepare("DELETE FROM meeting_requests WHERE id = ?").run(id);
+        await storage.deleteMeetingRequestById(id);
 
         return reply.status(502).send({
           message:

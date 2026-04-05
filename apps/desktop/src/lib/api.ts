@@ -3,6 +3,7 @@ import {
   aiMeetingGuideBindingSchema,
   aiMeetingGuideRequestSchema,
   aiMeetingGuideSchema,
+  authBootstrapSchema,
   authMeSchema,
   assignmentInputSchema,
   createMeetingRequestInputSchema,
@@ -109,6 +110,15 @@ export const login = (input: LoginInput) =>
     method: "POST",
     body: JSON.stringify(input),
   }, sessionSchema);
+
+export const getAuthBootstrap = () =>
+  request(
+    "/auth/bootstrap",
+    {
+      method: "GET",
+    },
+    authBootstrapSchema,
+  );
 
 export const getCurrentSessionUser = (token: string) =>
   request(

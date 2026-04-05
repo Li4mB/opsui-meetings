@@ -4,6 +4,9 @@ build/
 .env
 .env.local
 .env.production
+apps/*/.env
+apps/*/.env.local
+apps/*/.env.production
 .DS_Store
 Thumbs.db
 coverage/

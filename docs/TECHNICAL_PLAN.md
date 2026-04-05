@@ -2,9 +2,9 @@
 
 ## 1. Product Goal
 
-Build a polished Windows desktop application for the OpsUI team to view and manage demo bookings sourced from Google Calendar. The application must:
+Build a polished cross-platform desktop application for the OpsUI team to view and manage demo bookings sourced from Google Calendar. The application must:
 
-- ship as a standalone Windows `.exe`
+- ship as a standalone Windows installer and macOS desktop bundle
 - authenticate only approved internal users
 - support admin management of internal credentials
 - cache previously synced meetings for offline use
@@ -27,7 +27,7 @@ Use a two-part system:
 
 ### Why this architecture
 
-This app could technically talk to Google Calendar directly from the desktop client, but that would require shipping Google credentials inside the `.exe`. That is a poor security tradeoff for an internal tool that also needs central user administration. A small API gives us:
+This app could technically talk to Google Calendar directly from the desktop client, but that would require shipping Google credentials inside the desktop bundle. That is a poor security tradeoff for an internal tool that also needs central user administration. A small API gives us:
 
 - central approved-user management
 - central meeting assignment state shared across all users
@@ -40,7 +40,7 @@ This app could technically talk to Google Calendar directly from the desktop cli
 ### Desktop
 
 - `Tauri v2`
-  - best fit for a lightweight Windows `.exe`
+  - best fit for a lightweight Windows and macOS desktop app
   - native installer and updater support
   - lower memory footprint than Electron
 - `React 19 + TypeScript`
@@ -78,7 +78,7 @@ This app could technically talk to Google Calendar directly from the desktop cli
 
 ### Packaging / Delivery
 
-- `Tauri bundle` to produce Windows installer `.exe`
+- `Tauri bundle` to produce Windows and macOS distributables
 - `Tauri updater`
   - signed updates
   - static manifest hosted on GitHub Releases or an internal HTTPS URL
@@ -391,7 +391,7 @@ opsui-meetings/
 1. Configure updater
 2. Add blocking update gate
 3. Add release manifest generation docs
-4. Build Windows installer
+4. Build Windows and macOS desktop bundles
 5. Validate offline startup and sync recovery
 
 ## 13. Delivery Decisions For This Build
@@ -401,7 +401,7 @@ For this repository build, implement:
 - full desktop app codebase
 - full internal API codebase
 - local SQLite-backed API for development and small-team deployment
-- Windows packaging configuration for Tauri
+- Windows and macOS packaging configuration for Tauri
 - update-check plumbing with environment-configurable manifest URL
 - documentation for production configuration
 

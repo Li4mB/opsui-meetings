@@ -7,25 +7,21 @@ import {
   aiMeetingGuideSchema,
   meetingSchema,
 } from "@opsui/shared";
-import { db } from "../db/database.js";
+import { storage } from "../db/database.js";
 import { env } from "../config/env.js";
 import { authenticateRequest } from "./auth.js";
 import type {
   DbAiMeetingGuideRow,
-  DbMeetingRow,
-  DbPastMeetingRow,
 } from "../types.js";
+import type {
+  DbMeetingWithAssignmentRow,
+  DbPastMeetingWithAssignmentRow,
+} from "../db/adapter.js";
 
 const toMeeting = (
   row:
-    | (DbMeetingRow & {
-        assigned_user_name?: string | null;
-        assigned_user_color?: string | null;
-      })
-    | (DbPastMeetingRow & {
-        assigned_user_name?: string | null;
-        assigned_user_color?: string | null;
-      }),
+    | DbMeetingWithAssignmentRow
+    | DbPastMeetingWithAssignmentRow,
 ) =>
   meetingSchema.parse({
     id: row.id,
@@ -91,67 +87,13 @@ const buildGuidePrompt = (meeting: ReturnType<typeof toMeeting>) =>
     formatMeetingContext(meeting),
   ].join("\n");
 
-const getMeetingById = (meetingId: string) => {
-  const activeRow = db
-    .prepare<
-      unknown[],
-      DbMeetingRow & {
-        assigned_user_name: string | null;
-        assigned_user_color: string | null;
-      }
-    >(
-      `
-        SELECT
-          meetings.*,
-          users.display_name AS assigned_user_name,
-          users.color_hex AS assigned_user_color
-        FROM meetings
-        LEFT JOIN users ON users.id = meetings.assigned_user_id
-        WHERE meetings.id = ?
-        LIMIT 1
-      `,
-    )
-    .get(meetingId);
-
-  if (activeRow) {
-    return toMeeting(activeRow);
-  }
-
-  const pastRow = db
-    .prepare<
-      unknown[],
-      DbPastMeetingRow & {
-        assigned_user_name: string | null;
-        assigned_user_color: string | null;
-      }
-    >(
-      `
-        SELECT
-          past_meetings.*,
-          users.display_name AS assigned_user_name,
-          users.color_hex AS assigned_user_color
-        FROM past_meetings
-        LEFT JOIN users ON users.id = past_meetings.assigned_user_id
-        WHERE past_meetings.id = ?
-        LIMIT 1
-      `,
-    )
-    .get(meetingId);
-
-  return pastRow ? toMeeting(pastRow) : null;
+const getMeetingById = async (meetingId: string) => {
+  const row = await storage.findMeetingByIdIncludingPast(meetingId);
+  return row ? toMeeting(row) : null;
 };
 
-const getBoundGuideByGoogleEventId = (googleEventId: string) => {
-  const row = db
-    .prepare<unknown[], DbAiMeetingGuideRow>(
-      `
-        SELECT *
-        FROM ai_meeting_guides
-        WHERE google_event_id = ?
-        LIMIT 1
-      `,
-    )
-    .get(googleEventId);
+const getBoundGuideByGoogleEventId = async (googleEventId: string) => {
+  const row = await storage.getAiMeetingGuideByGoogleEventId(googleEventId);
 
   if (!row) {
     return aiMeetingGuideBindingSchema.parse({
@@ -172,7 +114,7 @@ export const registerAiRoutes = (app: import("fastify").FastifyInstance) => {
     { preHandler: [authenticateRequest] },
     async (request, reply) => {
       const meetingId = (request.params as { meetingId: string }).meetingId;
-      const meeting = getMeetingById(meetingId);
+      const meeting = await getMeetingById(meetingId);
 
       if (!meeting) {
         return reply.notFound("Meeting not found");
@@ -194,7 +136,7 @@ export const registerAiRoutes = (app: import("fastify").FastifyInstance) => {
       }
 
       const input = aiMeetingGuideRequestSchema.parse(request.body);
-      const meeting = getMeetingById(input.meetingId);
+      const meeting = await getMeetingById(input.meetingId);
 
       if (!meeting) {
         return reply.notFound("Meeting not found");
@@ -254,7 +196,7 @@ export const registerAiRoutes = (app: import("fastify").FastifyInstance) => {
     { preHandler: [authenticateRequest] },
     async (request, reply) => {
       const meetingId = (request.params as { meetingId: string }).meetingId;
-      const meeting = getMeetingById(meetingId);
+      const meeting = await getMeetingById(meetingId);
       const currentUser = request.user;
 
       if (!meeting) {
@@ -268,27 +210,13 @@ export const registerAiRoutes = (app: import("fastify").FastifyInstance) => {
       const guide = aiMeetingGuideSchema.parse(request.body);
       const timestamp = new Date().toISOString();
 
-      db.prepare(
-        `
-          INSERT INTO ai_meeting_guides (
-            google_event_id,
-            guide_json,
-            created_by_user_id,
-            created_at,
-            updated_at
-          ) VALUES (?, ?, ?, ?, ?)
-          ON CONFLICT(google_event_id) DO UPDATE SET
-            guide_json = excluded.guide_json,
-            created_by_user_id = excluded.created_by_user_id,
-            updated_at = excluded.updated_at
-        `,
-      ).run(
-        meeting.googleEventId,
-        JSON.stringify(guide),
-        currentUser.id,
-        timestamp,
-        timestamp,
-      );
+      await storage.upsertAiMeetingGuide({
+        google_event_id: meeting.googleEventId,
+        guide_json: JSON.stringify(guide),
+        created_by_user_id: currentUser.id,
+        created_at: timestamp,
+        updated_at: timestamp,
+      } satisfies DbAiMeetingGuideRow);
 
       return aiMeetingGuideBindingSchema.parse({
         guide,
@@ -302,15 +230,13 @@ export const registerAiRoutes = (app: import("fastify").FastifyInstance) => {
     { preHandler: [authenticateRequest] },
     async (request, reply) => {
       const meetingId = (request.params as { meetingId: string }).meetingId;
-      const meeting = getMeetingById(meetingId);
+      const meeting = await getMeetingById(meetingId);
 
       if (!meeting) {
         return reply.notFound("Meeting not found");
       }
 
-      db.prepare(
-        "DELETE FROM ai_meeting_guides WHERE google_event_id = ?",
-      ).run(meeting.googleEventId);
+      await storage.deleteAiMeetingGuideByGoogleEventId(meeting.googleEventId);
 
       return aiMeetingGuideBindingSchema.parse({
         guide: null,
