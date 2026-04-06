@@ -10,6 +10,38 @@ const STRONGHOLD_PASSWORD = "opsui-meetings-session-v1";
 const CLIENT_NAME = "opsui-meetings-session";
 const STORE_KEY = "session";
 
+const loadBrowserStoredSession = () => {
+  const raw = localStorage.getItem(BROWSER_KEY);
+
+  if (!raw) {
+    return null;
+  }
+
+  try {
+    return sessionSchema.parse(JSON.parse(raw));
+  } catch {
+    localStorage.removeItem(BROWSER_KEY);
+    return null;
+  }
+};
+
+const saveSessionToStronghold = async (session: Session) => {
+  const strongholdStore = await createStrongholdStore();
+
+  if (!strongholdStore) {
+    return false;
+  }
+
+  const { stronghold, store } = strongholdStore;
+  await store.insert(
+    STORE_KEY,
+    Array.from(new TextEncoder().encode(JSON.stringify(session))),
+  );
+  await stronghold.save();
+
+  return true;
+};
+
 const createStrongholdStore = async () => {
   try {
     const baseDir = await appDataDir();
@@ -29,25 +61,39 @@ const createStrongholdStore = async () => {
 };
 
 export const loadStoredSession = async (): Promise<Session | null> => {
+  const browserSession = loadBrowserStoredSession();
+
   if (!isTauriApp()) {
-    const raw = localStorage.getItem(BROWSER_KEY);
-    return raw ? sessionSchema.parse(JSON.parse(raw)) : null;
+    return browserSession;
   }
 
   const strongholdStore = await createStrongholdStore();
 
   if (!strongholdStore) {
-    return null;
+    return browserSession;
   }
 
   const { store } = strongholdStore;
   const value = await store.get(STORE_KEY);
 
   if (!value) {
-    return null;
+    if (browserSession) {
+      await saveSessionToStronghold(browserSession).catch(() => null);
+    }
+
+    return browserSession;
   }
 
-  return sessionSchema.parse(JSON.parse(new TextDecoder().decode(value)));
+  try {
+    return sessionSchema.parse(JSON.parse(new TextDecoder().decode(value)));
+  } catch {
+    if (browserSession) {
+      await saveSessionToStronghold(browserSession).catch(() => null);
+      return browserSession;
+    }
+
+    return null;
+  }
 };
 
 export const saveStoredSession = async (session: Session) => {
@@ -56,19 +102,13 @@ export const saveStoredSession = async (session: Session) => {
     return;
   }
 
-  const strongholdStore = await createStrongholdStore();
-
-  if (!strongholdStore) {
-    localStorage.setItem(BROWSER_KEY, JSON.stringify(session));
-    return;
-  }
-
-  const { stronghold, store } = strongholdStore;
-  await store.insert(
-    STORE_KEY,
-    Array.from(new TextEncoder().encode(JSON.stringify(session))),
+  const savedToStronghold = await saveSessionToStronghold(session).catch(
+    () => false,
   );
-  await stronghold.save();
+
+  if (!savedToStronghold) {
+    localStorage.setItem(BROWSER_KEY, JSON.stringify(session));
+  }
 };
 
 export const clearStoredSession = async () => {
