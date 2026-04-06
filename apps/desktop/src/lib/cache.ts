@@ -20,6 +20,31 @@ const DATABASE_URL = "sqlite:opsui-meetings-cache.db";
 const STORAGE_PREFIX = "opsui-meetings::";
 let databasePromise: Promise<Database | null> | null = null;
 
+const getStorageKey = (key: string) => `${STORAGE_PREFIX}${key}`;
+
+const saveCacheToDatabase = async <T>(key: string, payload: CacheEnvelope<T>) => {
+  const db = await getDatabase();
+
+  if (!db) {
+    return false;
+  }
+
+  try {
+    await db.execute(
+      `
+        INSERT INTO cache_entries (key, value, updated_at)
+        VALUES ($1, $2, $3)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
+      `,
+      [key, JSON.stringify(payload), payload.updatedAt],
+    );
+
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 const getDatabase = async () => {
   if (!isTauriApp()) {
     return null;
@@ -47,7 +72,7 @@ const getDatabase = async () => {
 };
 
 const loadBrowserCache = <T>(key: string): CacheEnvelope<T> | null => {
-  const raw = localStorage.getItem(`${STORAGE_PREFIX}${key}`);
+  const raw = localStorage.getItem(getStorageKey(key));
 
   if (!raw) {
     return null;
@@ -56,42 +81,55 @@ const loadBrowserCache = <T>(key: string): CacheEnvelope<T> | null => {
   try {
     return JSON.parse(raw) as CacheEnvelope<T>;
   } catch {
+    localStorage.removeItem(getStorageKey(key));
     return null;
   }
 };
 
-const writeBrowserCache = <T>(key: string, value: T) => {
-  const payload: CacheEnvelope<T> = {
-    value,
-    updatedAt: new Date().toISOString(),
-  };
-
-  localStorage.setItem(`${STORAGE_PREFIX}${key}`, JSON.stringify(payload));
+const writeBrowserCache = <T>(key: string, payload: CacheEnvelope<T>) => {
+  localStorage.setItem(getStorageKey(key), JSON.stringify(payload));
 };
 
 export const loadCache = async <T>(key: string): Promise<CacheEnvelope<T> | null> => {
+  const browserCache = loadBrowserCache<T>(key);
+
   if (!isTauriApp()) {
-    return loadBrowserCache<T>(key);
+    return browserCache;
   }
 
   const db = await getDatabase();
 
   if (!db) {
-    return null;
+    return browserCache;
   }
 
-  const rows = await db.select<Row[]>(
-    "SELECT value FROM cache_entries WHERE key = $1 LIMIT 1",
-    [key],
-  );
+  let rows: Row[] = [];
+
+  try {
+    rows = await db.select<Row[]>(
+      "SELECT value FROM cache_entries WHERE key = $1 LIMIT 1",
+      [key],
+    );
+  } catch {
+    return browserCache;
+  }
 
   if (!rows.length) {
-    return null;
+    if (browserCache) {
+      await saveCacheToDatabase(key, browserCache).catch(() => null);
+    }
+
+    return browserCache;
   }
 
   try {
     return JSON.parse(rows[0].value) as CacheEnvelope<T>;
   } catch {
+    if (browserCache) {
+      await saveCacheToDatabase(key, browserCache).catch(() => null);
+      return browserCache;
+    }
+
     return null;
   }
 };
@@ -103,33 +141,23 @@ export const saveCache = async <T>(key: string, value: T) => {
   };
 
   if (!isTauriApp()) {
-    writeBrowserCache(key, value);
+    writeBrowserCache(key, payload);
     return;
   }
 
-  const db = await getDatabase();
+  writeBrowserCache(key, payload);
 
-  if (!db) {
+  const savedToDatabase = await saveCacheToDatabase(key, payload);
+
+  if (!savedToDatabase) {
     return;
-  }
-
-  try {
-    await db.execute(
-      `
-        INSERT INTO cache_entries (key, value, updated_at)
-        VALUES ($1, $2, $3)
-        ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at
-      `,
-      [key, JSON.stringify(payload), payload.updatedAt],
-    );
-  } catch {
-    writeBrowserCache(key, value);
   }
 };
 
 export const clearCache = async (key: string) => {
+  localStorage.removeItem(getStorageKey(key));
+
   if (!isTauriApp()) {
-    localStorage.removeItem(`${STORAGE_PREFIX}${key}`);
     return;
   }
 
@@ -141,9 +169,7 @@ export const clearCache = async (key: string) => {
 
   try {
     await db.execute("DELETE FROM cache_entries WHERE key = $1", [key]);
-  } catch {
-    localStorage.removeItem(`${STORAGE_PREFIX}${key}`);
-  }
+  } catch {}
 };
 
 export const loadMeetingsCache = async () =>

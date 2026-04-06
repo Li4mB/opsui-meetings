@@ -97,18 +97,13 @@ export const loadStoredSession = async (): Promise<Session | null> => {
 };
 
 export const saveStoredSession = async (session: Session) => {
+  localStorage.setItem(BROWSER_KEY, JSON.stringify(session));
+
   if (!isTauriApp()) {
-    localStorage.setItem(BROWSER_KEY, JSON.stringify(session));
     return;
   }
 
-  const savedToStronghold = await saveSessionToStronghold(session).catch(
-    () => false,
-  );
-
-  if (!savedToStronghold) {
-    localStorage.setItem(BROWSER_KEY, JSON.stringify(session));
-  }
+  await saveSessionToStronghold(session).catch(() => false);
 };
 
 export const clearStoredSession = async () => {
