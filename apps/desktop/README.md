@@ -1,73 +1,61 @@
-# React + TypeScript + Vite
+# OpsUI Desktop
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Cross-platform Tauri desktop app for OpsUI Meetings.
 
-Currently, two official plugins are available:
+## Shared product surface
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+- Windows and macOS ship the same React UI, business logic, data contracts, and state flow.
+- Platform-specific behavior is isolated to:
+  - `src/lib/platform.ts`
+  - `src/lib/cache.ts`
+  - `src/lib/session.ts`
+  - `src/lib/updater.ts`
+  - `src-tauri/tauri.windows.conf.json`
+  - `src-tauri/tauri.macos.conf.json`
 
-## React Compiler
+## Local development
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+Install workspace dependencies from the repo root:
 
-## Expanding the ESLint configuration
-
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
-
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+```sh
+npm install
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+Run the web UI only:
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+```sh
+npm run dev:desktop
+```
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+Run the native Tauri desktop shell:
+
+```sh
+npm run dev:desktop:tauri
+```
+
+## Desktop builds
+
+The desktop release build expects the Tauri updater signing key:
+
+```sh
+export TAURI_SIGNING_PRIVATE_KEY_PATH="$HOME/.tauri/opsui-meetings.key"
+export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="<password>"
+```
+
+Build for the current Windows host:
+
+```sh
+npm run build:desktop:windows
+```
+
+Build for the current macOS host:
+
+```sh
+npm run build:desktop:macos
+```
+
+The shared entry point for signed native bundles is:
+
+```sh
+npm run build:desktop
 ```

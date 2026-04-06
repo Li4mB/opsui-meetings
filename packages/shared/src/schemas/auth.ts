@@ -22,6 +22,18 @@ export const authMeSchema = z.object({
   user: authUserSchema,
 });
 
+export const authBootstrapUserSchema = z.object({
+  username: z.string(),
+  displayName: z.string(),
+  role: z.enum(["admin", "member"]),
+  colorHex: z.string(),
+});
+
+export const authBootstrapSchema = z.object({
+  users: z.array(authBootstrapUserSchema),
+});
+
 export type LoginInput = z.infer<typeof loginInputSchema>;
 export type AuthUser = z.infer<typeof authUserSchema>;
 export type Session = z.infer<typeof sessionSchema>;
+export type AuthBootstrapUser = z.infer<typeof authBootstrapUserSchema>;

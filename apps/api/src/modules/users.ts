@@ -5,7 +5,7 @@ import {
   userSchema,
 } from "@opsui/shared";
 import { nanoid } from "nanoid";
-import { db } from "../db/database.js";
+import { storage } from "../db/database.js";
 import { authenticateRequest, requireAdmin } from "./auth.js";
 import type { DbUserRow } from "../types.js";
 
@@ -28,9 +28,7 @@ export const registerUserRoutes = (app: import("fastify").FastifyInstance) => {
   ) => {
     const id = (request.params as { id: string }).id;
     const input = updateUserInputSchema.parse(request.body);
-    const existing = db
-      .prepare<unknown[], DbUserRow>("SELECT * FROM users WHERE id = ? LIMIT 1")
-      .get(id);
+    const existing = await storage.findUserById(id);
 
     if (!existing) {
       return reply.notFound("User not found");
@@ -49,20 +47,7 @@ export const registerUserRoutes = (app: import("fastify").FastifyInstance) => {
       updated_at: new Date().toISOString(),
     };
 
-    db.prepare(`
-      UPDATE users
-      SET username = ?, display_name = ?, role = ?, password_hash = ?, color_hex = ?, active = ?, updated_at = ?
-      WHERE id = ?
-    `).run(
-      updated.username,
-      updated.display_name,
-      updated.role,
-      updated.password_hash,
-      updated.color_hex,
-      updated.active,
-      updated.updated_at,
-      id,
-    );
+    await storage.updateUser(updated);
 
     return toUser(updated);
   };
@@ -73,10 +58,10 @@ export const registerUserRoutes = (app: import("fastify").FastifyInstance) => {
   ) => {
     const id = (request.params as { id: string }).id;
 
-    db.prepare("UPDATE meetings SET assigned_user_id = NULL WHERE assigned_user_id = ?").run(id);
-    const result = db.prepare("DELETE FROM users WHERE id = ?").run(id);
+    await storage.clearMeetingAssignmentsForUser(id);
+    const deleted = await storage.deleteUserById(id);
 
-    if (!result.changes) {
+    if (!deleted) {
       return reply.notFound("User not found");
     }
 
@@ -87,9 +72,7 @@ export const registerUserRoutes = (app: import("fastify").FastifyInstance) => {
     "/users",
     { preHandler: [authenticateRequest] },
     async () => {
-      const rows = db
-        .prepare<unknown[], DbUserRow>("SELECT * FROM users ORDER BY display_name ASC")
-        .all();
+      const rows = await storage.listUsers();
 
       return rows.map(toUser);
     },
@@ -102,9 +85,7 @@ export const registerUserRoutes = (app: import("fastify").FastifyInstance) => {
       const input = createUserInputSchema.parse(request.body);
       const now = new Date().toISOString();
 
-      const existing = db
-        .prepare("SELECT id FROM users WHERE username = ? LIMIT 1")
-        .get(input.username);
+      const existing = await storage.findUserIdByUsername(input.username);
 
       if (existing) {
         return reply.conflict("Username already exists");
@@ -122,21 +103,7 @@ export const registerUserRoutes = (app: import("fastify").FastifyInstance) => {
         updated_at: now,
       };
 
-      db.prepare(`
-        INSERT INTO users (
-          id, username, display_name, role, password_hash, color_hex, active, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        user.id,
-        user.username,
-        user.display_name,
-        user.role,
-        user.password_hash,
-        user.color_hex,
-        user.active,
-        user.created_at,
-        user.updated_at,
-      );
+      await storage.insertUser(user);
 
       return toUser(user);
     },

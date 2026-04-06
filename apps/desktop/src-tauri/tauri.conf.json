@@ -27,9 +27,6 @@
   },
   "bundle": {
     "active": true,
-    "targets": [
-      "nsis"
-    ],
     "publisher": "OpsUI",
     "createUpdaterArtifacts": true,
     "icon": [
@@ -50,6 +47,7 @@
       "active": true,
       "dialog": false,
       "endpoints": [
+        "https://github.com/opsui/opsui-meetings/releases/latest/download/{{target}}-{{arch}}.json",
         "https://github.com/opsui/opsui-meetings/releases/latest/download/latest.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQwM0IzQjQ0NjcxNENDREQKUldUZHpCUm5SRHM3ME9zYzJLV3NwTEZyenlYZjVKTkdMTk5jTklGcHFPRDBKSGNGZTc5aXFvQkQK"

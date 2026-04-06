@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import type { CreateUserInput, UpdateUserInput, User } from "@opsui/shared";
 import { getInitials } from "../lib/ui";
 import { SelectMenu } from "./SelectMenu";
@@ -71,11 +71,6 @@ export const AdminPanel = ({
   ];
   const activeUsers = users.filter((user) => user.active).length;
   const adminUsers = users.filter((user) => user.role === "admin").length;
-
-  useEffect(() => {
-    setDrafts(buildDrafts(users));
-    setRowErrors({});
-  }, [users]);
 
   const handleSaveUser = async (userId: string) => {
     const draft = drafts[userId];

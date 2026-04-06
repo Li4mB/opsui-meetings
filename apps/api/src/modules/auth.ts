@@ -1,8 +1,12 @@
 import argon2 from "argon2";
 import { SignJWT, jwtVerify } from "jose";
-import { loginInputSchema, sessionSchema } from "@opsui/shared";
+import {
+  authBootstrapSchema,
+  loginInputSchema,
+  sessionSchema,
+} from "@opsui/shared";
 import type { FastifyReply, FastifyRequest } from "fastify";
-import { db } from "../db/database.js";
+import { storage } from "../db/database.js";
 import { env } from "../config/env.js";
 import type { AuthUser, DbUserRow } from "../types.js";
 
@@ -59,13 +63,22 @@ export const requireAdmin = async (request: FastifyRequest, reply: FastifyReply)
 };
 
 export const registerAuthRoutes = (app: import("fastify").FastifyInstance) => {
+  app.get("/auth/bootstrap", async () => {
+    const users = (await storage.listUsers())
+      .filter((user) => Boolean(user.active))
+      .map((user) => ({
+        username: user.username,
+        displayName: user.display_name,
+        role: user.role,
+        colorHex: user.color_hex,
+      }));
+
+    return authBootstrapSchema.parse({ users });
+  });
+
   app.post("/auth/login", async (request, reply) => {
     const input = loginInputSchema.parse(request.body);
-    const user = db
-      .prepare<unknown[], DbUserRow>(
-        "SELECT * FROM users WHERE username = ? AND active = 1 LIMIT 1",
-      )
-      .get(input.username);
+    const user = await storage.findActiveUserByUsername(input.username);
 
     if (!user) {
       return reply.unauthorized("Invalid username or password");

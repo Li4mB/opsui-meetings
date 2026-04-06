@@ -9,7 +9,7 @@ import { registerAiRoutes } from "./modules/ai.js";
 import { registerMeetingRoutes } from "./modules/meetings.js";
 import { registerMeetingRequestRoutes } from "./modules/meeting-requests.js";
 import { registerUserRoutes } from "./modules/users.js";
-import { seedAdminIfMissing } from "./db/database.js";
+import { initializeDatabase, seedAdminIfMissing } from "./db/database.js";
 
 declare module "fastify" {
   interface FastifyRequest {
@@ -18,6 +18,7 @@ declare module "fastify" {
 }
 
 const buildServer = async () => {
+  await initializeDatabase();
   await seedAdminIfMissing();
 
   const app = Fastify({ logger: true });

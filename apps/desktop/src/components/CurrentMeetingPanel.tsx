@@ -44,6 +44,7 @@ export const CurrentMeetingPanel = ({
   onOpenUrl,
   onSaveGuide,
 }: Props) => {
+  const meetingId = meeting?.id ?? null;
   const [guide, setGuide] = useState<AiMeetingGuide | null>(null);
   const [guideError, setGuideError] = useState<string | null>(null);
   const [isGeneratingGuide, setIsGeneratingGuide] = useState(false);
@@ -75,7 +76,7 @@ export const CurrentMeetingPanel = ({
     setIsGuideBindingBusy(false);
     setSaveState("idle");
     clearSaveAnimationTimers();
-  }, [meeting?.id]);
+  }, [meetingId]);
 
   useEffect(
     () => () => {
@@ -85,7 +86,7 @@ export const CurrentMeetingPanel = ({
   );
 
   useEffect(() => {
-    if (!meeting) {
+    if (!meetingId) {
       return;
     }
 
@@ -93,7 +94,7 @@ export const CurrentMeetingPanel = ({
 
     const loadSavedGuide = async () => {
       try {
-        const binding = await onLoadSavedGuide(meeting.id);
+        const binding = await onLoadSavedGuide(meetingId);
 
         if (!active) {
           return;
@@ -119,7 +120,7 @@ export const CurrentMeetingPanel = ({
     return () => {
       active = false;
     };
-  }, [meeting?.id, onLoadSavedGuide]);
+  }, [meetingId, onLoadSavedGuide]);
 
   if (!meeting) {
     return (

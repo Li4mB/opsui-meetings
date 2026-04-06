@@ -1,0 +1,14 @@
+{
+  "bundle": {
+    "targets": [
+      "nsis"
+    ]
+  },
+  "plugins": {
+    "updater": {
+      "windows": {
+        "installMode": "passive"
+      }
+    }
+  }
+}
