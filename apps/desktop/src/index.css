@@ -2446,6 +2446,18 @@ label {
   flex-shrink: 0;
 }
 
+.create-meeting-module-card--selected .create-meeting-module-card__checkbox {
+  border-color: rgba(125, 186, 255, 0.52);
+  background: rgba(59, 130, 246, 0.14);
+}
+
+.create-meeting-module-card__check-icon {
+  width: 0.88rem;
+  height: 0.88rem;
+  display: block;
+  color: #8b5cf6;
+}
+
 .create-meeting-mode-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -4022,6 +4034,15 @@ label {
   color: #e8d9ff;
 }
 
+.create-meeting-module-card--selected .create-meeting-module-card__checkbox {
+  border-color: rgba(196, 181, 253, 0.5);
+  background: rgba(139, 92, 246, 0.16);
+}
+
+.create-meeting-module-card__check-icon {
+  color: #c084fc;
+}
+
 .create-meeting-mode-card__dot {
   border-color: rgba(196, 181, 253, 0.28);
   background: rgba(255, 255, 255, 0.08);
@@ -4092,6 +4113,11 @@ label {
 .create-meeting-select-all > * {
   position: relative;
   z-index: 1;
+}
+
+.create-meeting-select-all[aria-pressed="true"] {
+  border-color: rgba(196, 181, 253, 0.44);
+  background: linear-gradient(180deg, #c4b5fd, #8b5cf6);
 }
 
 .create-meeting-select-all:hover:not(:disabled) {

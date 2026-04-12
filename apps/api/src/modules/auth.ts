@@ -20,6 +20,23 @@ const toAuthUser = (user: DbUserRow): AuthUser => ({
   colorHex: user.color_hex,
 });
 
+const resolveAuthenticatedUser = async (payload: Record<string, unknown>) => {
+  const subjectId = typeof payload.sub === "string" ? payload.sub : "";
+  const username = typeof payload.username === "string" ? payload.username : "";
+
+  const userById = subjectId ? await storage.findUserById(subjectId) : null;
+
+  if (userById?.active) {
+    return userById;
+  }
+
+  if (!username) {
+    return null;
+  }
+
+  return storage.findActiveUserByUsername(username);
+};
+
 export const signSession = async (user: AuthUser) =>
   new SignJWT({
     username: user.username,
@@ -43,14 +60,13 @@ export const authenticateRequest = async (request: FastifyRequest, reply: Fastif
   try {
     const token = header.replace("Bearer ", "");
     const { payload } = await jwtVerify(token, secret);
+    const user = await resolveAuthenticatedUser(payload);
 
-    request.user = {
-      id: payload.sub as string,
-      username: payload.username as string,
-      displayName: payload.displayName as string,
-      role: payload.role as AuthUser["role"],
-      colorHex: payload.colorHex as string,
-    };
+    if (!user) {
+      return reply.unauthorized("Invalid or expired session");
+    }
+
+    request.user = toAuthUser(user);
   } catch {
     return reply.unauthorized("Invalid or expired session");
   }

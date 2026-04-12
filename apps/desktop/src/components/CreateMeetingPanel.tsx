@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type {
   CreateMeetingRequestInput,
   MeetingRequest,
@@ -62,6 +62,8 @@ export const CreateMeetingPanel = ({ isSubmitting, onSubmit }: Props) => {
   const [form, setForm] = useState<CreateMeetingRequestInput>(initialForm);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const preferredDateRef = useRef<HTMLInputElement | null>(null);
+  const preferredTimeRef = useRef<HTMLInputElement | null>(null);
   const allModulesSelected =
     form.modules.length === meetingRequestModuleOptions.length;
 
@@ -74,14 +76,19 @@ export const CreateMeetingPanel = ({ isSubmitting, onSubmit }: Props) => {
     }));
   };
 
-  const handleSelectAllModules = () => {
+  const handleToggleAllModules = () => {
     setForm((current) => ({
       ...current,
-      modules: [...meetingRequestModuleOptions],
+      modules: current.modules.length === meetingRequestModuleOptions.length
+        ? []
+        : [...meetingRequestModuleOptions],
     }));
   };
 
   const handleSubmit = async () => {
+    const preferredDate = preferredDateRef.current?.value || form.preferredDate;
+    const preferredTime = preferredTimeRef.current?.value || form.preferredTime;
+
     if (form.clientName.trim().length < 2) {
       setError("Client name must be at least 2 characters.");
       return;
@@ -107,7 +114,7 @@ export const CreateMeetingPanel = ({ isSubmitting, onSubmit }: Props) => {
       return;
     }
 
-    if (!form.preferredDate || !form.preferredTime) {
+    if (!preferredDate || !preferredTime) {
       setError("Choose a preferred date and time.");
       return;
     }
@@ -120,6 +127,8 @@ export const CreateMeetingPanel = ({ isSubmitting, onSubmit }: Props) => {
       email: form.email.trim(),
       phone: form.phone.trim(),
       companyName: form.companyName.trim(),
+      preferredDate,
+      preferredTime,
       additionalInfo: form.additionalInfo.trim(),
     });
 
@@ -275,11 +284,11 @@ export const CreateMeetingPanel = ({ isSubmitting, onSubmit }: Props) => {
               <div className="create-meeting-section__header create-meeting-section__header--modules">
                 <button
                   className="create-meeting-select-all"
-                  disabled={allModulesSelected}
-                  onClick={handleSelectAllModules}
+                  aria-pressed={allModulesSelected}
+                  onClick={handleToggleAllModules}
                   type="button"
                 >
-                  Select All
+                  {allModulesSelected ? "Deselect All" : "Select All"}
                 </button>
                 <div>
                   <span className="eyebrow">Modules</span>
@@ -299,7 +308,22 @@ export const CreateMeetingPanel = ({ isSubmitting, onSubmit }: Props) => {
                       type="button"
                     >
                       <span className="create-meeting-module-card__checkbox">
-                        {selected ? "OK" : ""}
+                        {selected ? (
+                          <svg
+                            aria-hidden="true"
+                            className="create-meeting-module-card__check-icon"
+                            fill="none"
+                            viewBox="0 0 16 16"
+                          >
+                            <path
+                              d="M3.5 8.5 6.5 11.5 12.5 5.5"
+                              stroke="currentColor"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              strokeWidth="2"
+                            />
+                          </svg>
+                        ) : null}
                       </span>
                       <span>{module}</span>
                     </button>
@@ -344,6 +368,7 @@ export const CreateMeetingPanel = ({ isSubmitting, onSubmit }: Props) => {
                 <label>
                   Preferred Date
                   <input
+                    ref={preferredDateRef}
                     onChange={(event) =>
                       setForm((current) => ({
                         ...current,
@@ -358,6 +383,7 @@ export const CreateMeetingPanel = ({ isSubmitting, onSubmit }: Props) => {
                 <label>
                   Preferred Time
                   <input
+                    ref={preferredTimeRef}
                     onChange={(event) =>
                       setForm((current) => ({
                         ...current,
