@@ -489,7 +489,7 @@ export const AppShell = ({
                   onClick={() => onSetFilters({ assignedUserId: "" })}
                   type="button"
                 >
-                  <span className="sidebar-filter__flag">--</span>
+                  <span className="sidebar-filter__flag">⚠</span>
                   <span>Unassigned</span>
                   <span className="sidebar-filter__count">{unassignedCount}</span>
                 </button>
