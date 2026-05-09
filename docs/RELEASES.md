@@ -15,8 +15,8 @@ The desktop app blocks normal access when an update is detected and installs the
 
 New desktop builds check:
 
-1. `https://github.com/opsui/opsui-meetings/releases/latest/download/{{target}}-{{arch}}.json`
-2. `https://github.com/opsui/opsui-meetings/releases/latest/download/latest.json`
+1. `https://github.com/Li4mB/opsui-meetings/releases/latest/download/{{target}}-{{arch}}.json`
+2. `https://github.com/Li4mB/opsui-meetings/releases/latest/download/latest.json`
 
 Current manifests:
 
