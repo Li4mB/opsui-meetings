@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   CreateMeetingRequestInput,
   MeetingRequest,
@@ -58,6 +58,47 @@ const initialForm: CreateMeetingRequestInput = {
   additionalInfo: "",
 };
 
+type AudioWindow = Window & {
+  webkitAudioContext?: typeof AudioContext;
+};
+
+const playMeetingCreatedChime = () => {
+  const AudioContextCtor =
+    window.AudioContext ?? (window as AudioWindow).webkitAudioContext;
+
+  if (!AudioContextCtor) {
+    return;
+  }
+
+  try {
+    const audioContext = new AudioContextCtor();
+    const now = audioContext.currentTime;
+    const gain = audioContext.createGain();
+
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(0.11, now + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.38);
+    gain.connect(audioContext.destination);
+
+    [659.25, 880].forEach((frequency, index) => {
+      const oscillator = audioContext.createOscillator();
+      const startTime = now + index * 0.08;
+
+      oscillator.type = "sine";
+      oscillator.frequency.setValueAtTime(frequency, startTime);
+      oscillator.connect(gain);
+      oscillator.start(startTime);
+      oscillator.stop(startTime + 0.28);
+    });
+
+    window.setTimeout(() => {
+      void audioContext.close().catch(() => undefined);
+    }, 600);
+  } catch {
+    // Audio is a nicety, so blocked playback should never affect saving.
+  }
+};
+
 export const CreateMeetingPanel = ({ isSubmitting, onSubmit }: Props) => {
   const [form, setForm] = useState<CreateMeetingRequestInput>(initialForm);
   const [error, setError] = useState<string | null>(null);
@@ -66,6 +107,20 @@ export const CreateMeetingPanel = ({ isSubmitting, onSubmit }: Props) => {
   const preferredTimeRef = useRef<HTMLInputElement | null>(null);
   const allModulesSelected =
     form.modules.length === meetingRequestModuleOptions.length;
+
+  useEffect(() => {
+    if (!successMessage) {
+      return undefined;
+    }
+
+    const timeout = window.setTimeout(() => {
+      setSuccessMessage(null);
+    }, 4200);
+
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [successMessage]);
 
   const toggleModule = (module: MeetingRequestModule) => {
     setForm((current) => ({
@@ -88,6 +143,8 @@ export const CreateMeetingPanel = ({ isSubmitting, onSubmit }: Props) => {
   const handleSubmit = async () => {
     const preferredDate = preferredDateRef.current?.value || form.preferredDate;
     const preferredTime = preferredTimeRef.current?.value || form.preferredTime;
+
+    setSuccessMessage(null);
 
     if (form.clientName.trim().length < 2) {
       setError("Client name must be at least 2 characters.");
@@ -133,8 +190,9 @@ export const CreateMeetingPanel = ({ isSubmitting, onSubmit }: Props) => {
     });
 
     setSuccessMessage(
-      `Meeting intake saved for ${created.clientName} at ${created.companyName}.`,
+      `${created.clientName} at ${created.companyName} is ready for the team.`,
     );
+    playMeetingCreatedChime();
     setForm(initialForm);
   };
 
@@ -422,7 +480,23 @@ export const CreateMeetingPanel = ({ isSubmitting, onSubmit }: Props) => {
 
             {error ? <div className="form-error">{error}</div> : null}
             {successMessage ? (
-              <div className="create-meeting-success">{successMessage}</div>
+              <div className="meeting-created-toast" role="status" aria-live="polite">
+                <span className="meeting-created-toast__icon">
+                  <svg aria-hidden="true" fill="none" viewBox="0 0 16 16">
+                    <path
+                      d="M3.5 8.5 6.5 11.5 12.5 5.5"
+                      stroke="currentColor"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                      strokeWidth="2"
+                    />
+                  </svg>
+                </span>
+                <span>
+                  <strong>Meeting Created!</strong>
+                  <p>{successMessage}</p>
+                </span>
+              </div>
             ) : null}
 
             <div className="create-meeting-actions">
