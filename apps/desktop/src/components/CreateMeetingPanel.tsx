@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type {
   CreateMeetingRequestInput,
   MeetingRequest,
@@ -103,10 +104,15 @@ export const CreateMeetingPanel = ({ isSubmitting, onSubmit }: Props) => {
   const [form, setForm] = useState<CreateMeetingRequestInput>(initialForm);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [canUsePortal, setCanUsePortal] = useState(false);
   const preferredDateRef = useRef<HTMLInputElement | null>(null);
   const preferredTimeRef = useRef<HTMLInputElement | null>(null);
   const allModulesSelected =
     form.modules.length === meetingRequestModuleOptions.length;
+
+  useEffect(() => {
+    setCanUsePortal(true);
+  }, []);
 
   useEffect(() => {
     if (!successMessage) {
@@ -502,7 +508,7 @@ export const CreateMeetingPanel = ({ isSubmitting, onSubmit }: Props) => {
         </div>
       </div>
 
-      {successMessage ? (
+      {successMessage && canUsePortal ? createPortal(
         <div className="meeting-created-toast" role="status" aria-live="polite">
           <span className="meeting-created-toast__icon">
             <svg aria-hidden="true" fill="none" viewBox="0 0 16 16">
@@ -519,7 +525,8 @@ export const CreateMeetingPanel = ({ isSubmitting, onSubmit }: Props) => {
             <strong>Meeting Created!</strong>
             <p>{successMessage}</p>
           </span>
-        </div>
+        </div>,
+        document.body,
       ) : null}
     </section>
   );
