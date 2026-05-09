@@ -2503,6 +2503,7 @@ label {
 .create-meeting-success {
   display: flex;
   align-items: flex-start;
+  flex: 1 1 360px;
   gap: 0.85rem;
   padding: 0.9rem 1rem;
   border-radius: 14px;
@@ -2546,10 +2547,13 @@ label {
 
 .create-meeting-actions {
   display: flex;
+  align-items: center;
+  gap: 1rem;
   justify-content: flex-end;
 }
 
 .create-meeting-submit {
+  flex: 0 0 auto;
   min-width: 240px;
   padding: 0.95rem 1.2rem;
   border-radius: 14px;
@@ -4527,6 +4531,18 @@ label {
   bottom: 0;
   padding-top: 12px;
   background: linear-gradient(180deg, rgba(10, 10, 10, 0), rgba(10, 10, 10, 0.96) 40%);
+}
+
+@media (max-width: 760px) {
+  .create-meeting-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .create-meeting-success,
+  .create-meeting-submit {
+    width: 100%;
+  }
 }
 
 /* Final polish pass: AI guide rail, admin forms, and detail copy readability */

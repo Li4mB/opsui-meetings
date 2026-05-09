@@ -163,14 +163,13 @@ export const registerMeetingRequestRoutes = (
           role: currentUser.role,
         });
       } catch (error) {
-        await storage.deleteMeetingRequestById(id);
-
-        return reply.status(502).send({
-          message:
-            error instanceof Error
-              ? error.message
-              : "Unable to deliver the meeting request to Make.",
-        });
+        request.log.error(
+          {
+            err: error,
+            meetingRequestId: id,
+          },
+          "Meeting request was saved, but Make webhook delivery failed.",
+        );
       }
 
       return meetingRequest;

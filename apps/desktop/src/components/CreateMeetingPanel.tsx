@@ -115,7 +115,7 @@ export const CreateMeetingPanel = ({ isSubmitting, onSubmit }: Props) => {
 
     const timeout = window.setTimeout(() => {
       setSuccessMessage(null);
-    }, 4200);
+    }, 8000);
 
     return () => {
       window.clearTimeout(timeout);
@@ -178,22 +178,30 @@ export const CreateMeetingPanel = ({ isSubmitting, onSubmit }: Props) => {
 
     setError(null);
 
-    const created = await onSubmit({
-      ...form,
-      clientName: form.clientName.trim(),
-      email: form.email.trim(),
-      phone: form.phone.trim(),
-      companyName: form.companyName.trim(),
-      preferredDate,
-      preferredTime,
-      additionalInfo: form.additionalInfo.trim(),
-    });
+    try {
+      const created = await onSubmit({
+        ...form,
+        clientName: form.clientName.trim(),
+        email: form.email.trim(),
+        phone: form.phone.trim(),
+        companyName: form.companyName.trim(),
+        preferredDate,
+        preferredTime,
+        additionalInfo: form.additionalInfo.trim(),
+      });
 
-    setSuccessMessage(
-      `${created.clientName} at ${created.companyName} is ready for the team.`,
-    );
-    playMeetingCreatedChime();
-    setForm(initialForm);
+      setSuccessMessage(
+        `${created.clientName} at ${created.companyName} is ready for the team.`,
+      );
+      playMeetingCreatedChime();
+      setForm(initialForm);
+    } catch (submitError) {
+      setError(
+        submitError instanceof Error
+          ? submitError.message
+          : "Unable to save the meeting intake.",
+      );
+    }
   };
 
   return (
@@ -479,27 +487,27 @@ export const CreateMeetingPanel = ({ isSubmitting, onSubmit }: Props) => {
             </section>
 
             {error ? <div className="form-error">{error}</div> : null}
-            {successMessage ? (
-              <div className="create-meeting-success" role="status" aria-live="polite">
-                <span className="create-meeting-success__icon">
-                  <svg aria-hidden="true" fill="none" viewBox="0 0 16 16">
-                    <path
-                      d="M3.5 8.5 6.5 11.5 12.5 5.5"
-                      stroke="currentColor"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth="2"
-                    />
-                  </svg>
-                </span>
-                <span>
-                  <strong>Meeting Created!</strong>
-                  <p>{successMessage}</p>
-                </span>
-              </div>
-            ) : null}
 
             <div className="create-meeting-actions">
+              {successMessage ? (
+                <div className="create-meeting-success" role="status" aria-live="polite">
+                  <span className="create-meeting-success__icon">
+                    <svg aria-hidden="true" fill="none" viewBox="0 0 16 16">
+                      <path
+                        d="M3.5 8.5 6.5 11.5 12.5 5.5"
+                        stroke="currentColor"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeWidth="2"
+                      />
+                    </svg>
+                  </span>
+                  <span>
+                    <strong>Meeting Created!</strong>
+                    <p>{successMessage}</p>
+                  </span>
+                </div>
+              ) : null}
               <button
                 className="primary-button create-meeting-submit"
                 disabled={isSubmitting}
