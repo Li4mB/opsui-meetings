@@ -61,6 +61,25 @@ const dbProvider =
   normalizeDbProvider(process.env.OPSUI_DB_PROVIDER) ??
   (dbUrl ? "postgres" : "sqlite");
 
+const isRender = process.env.RENDER === "true";
+
+const defaultSqliteDbPath = isRender
+  ? "/var/data/opsui-meetings.sqlite"
+  : path.resolve(appRoot, "data", "opsui-meetings.sqlite");
+
+const dbPath = process.env.OPSUI_DB_PATH?.trim() || defaultSqliteDbPath;
+
+if (
+  isRender &&
+  dbProvider === "sqlite" &&
+  path.resolve(dbPath).startsWith(path.resolve(appRoot))
+) {
+  throw new Error(
+    `Render SQLite database path "${dbPath}" is inside the deploy directory and will be wiped on deploy. ` +
+      "Set OPSUI_DB_PATH=/var/data/opsui-meetings.sqlite on a Render persistent disk, or set OPSUI_DB_PROVIDER=postgres with OPSUI_DB_URL.",
+  );
+}
+
 export const env = {
   appRoot,
   port: Number(process.env.PORT ?? 8787),
@@ -83,7 +102,5 @@ export const env = {
   dbUrl,
   dbSsl: parseBoolean(process.env.OPSUI_DB_SSL, dbProvider === "postgres"),
   dbSchema: normalizeDbSchema(process.env.OPSUI_DB_SCHEMA),
-  dbPath:
-    process.env.OPSUI_DB_PATH?.trim() ||
-    path.resolve(appRoot, "data", "opsui-meetings.sqlite"),
+  dbPath,
 };

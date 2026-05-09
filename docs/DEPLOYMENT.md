@@ -96,6 +96,14 @@ By default, local development stores API state in:
 
 - `apps/api/data/opsui-meetings.sqlite`
 
+On Render, the API defaults SQLite storage to:
+
+- `/var/data/opsui-meetings.sqlite`
+
+This path must be backed by a Render persistent disk mounted at `/var/data`.
+Without that disk, deploys can still start with an empty filesystem and old
+accounts will not come back.
+
 For local SQLite persistence, set:
 
 - `OPSUI_DB_PATH=<absolute-path-to-persistent-disk>/opsui-meetings.sqlite`
@@ -129,6 +137,12 @@ For team use, deploy the API on a shared host so all desktop clients see the sam
 - sync state
 
 ### Render rollout recommendation
+
+Render deploy folders are ephemeral. Do not store the SQLite database inside the
+repo checkout, `apps/api/data`, or any build output directory in production. The
+API now refuses to start on Render if `OPSUI_DB_PATH` points inside the deploy
+directory, because that setup can silently reset users and meetings on the next
+push.
 
 If your current Render deployment already has live users and passwords in its
 existing SQLite database, keep Render on that SQLite storage for the first

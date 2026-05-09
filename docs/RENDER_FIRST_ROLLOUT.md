@@ -32,6 +32,10 @@ Attach a Render persistent disk if the service does not already have one.
 
 - Mount path: `/var/data`
 
+This is required for SQLite production persistence. Render replaces the deploy
+directory on each push, so SQLite files stored in the repo checkout or build
+folder will be lost during updates.
+
 Set:
 
 ```env
@@ -43,6 +47,9 @@ Important:
 - keep this pointed at the same persistent disk path the current Render service
   already uses
 - do not switch the production service to a fresh empty SQLite path
+- if the previous database was created in Render's deploy directory instead of a
+  persistent disk, recover it from Render backup/shell before the next deploy;
+  code cannot recreate deleted users or password hashes
 
 ## Environment variables to set
 
