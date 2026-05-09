@@ -111,12 +111,18 @@ export const runCommand = ({
   env,
   shell = false,
 }) => {
-  const result = spawnSync(command, args, {
+  const shouldRunBatchThroughCmd =
+    process.platform === "win32" && !shell && /\.cmd$/i.test(command);
+  const result = spawnSync(
+    shouldRunBatchThroughCmd ? "cmd.exe" : command,
+    shouldRunBatchThroughCmd ? ["/d", "/c", command, ...args] : args,
+    {
     cwd,
     env: { ...process.env, ...env },
     stdio: "inherit",
     shell,
-  });
+    },
+  );
 
   if (typeof result.status === "number" && result.status !== 0) {
     throw new Error(`${command} exited with code ${result.status}`);
@@ -127,10 +133,44 @@ export const runCommand = ({
   }
 };
 
-const quoteForCmd = (value) =>
+const quoteForCmdArg = (value) =>
   /[\s"&|^<>]/.test(value)
     ? `"${value.replace(/"/g, '""')}"`
     : value;
+
+const runWindowsTauriBuild = (vcvarsPath, extraArgs) => {
+  const tempRoot = process.env.TEMP ?? process.env.TMP ?? tauriRoot;
+  const scriptPath = path.join(tempRoot, `opsui-tauri-build-${process.pid}.cmd`);
+  const tauriArgs = extraArgs.map(quoteForCmdArg).join(" ");
+  const tauriCommand = [
+    quoteForCmdArg(npmCommand),
+    "run",
+    "tauri",
+    "build",
+    ...(tauriArgs ? ["--", tauriArgs] : []),
+  ].join(" ");
+
+  fs.writeFileSync(
+    scriptPath,
+    [
+      "@echo off",
+      `call ${quoteForCmdArg(vcvarsPath)}`,
+      "if errorlevel 1 exit /b %errorlevel%",
+      tauriCommand,
+      "exit /b %errorlevel%",
+      "",
+    ].join("\r\n"),
+  );
+
+  try {
+    runCommand({
+      command: "cmd.exe",
+      args: ["/d", "/c", "call", scriptPath],
+    });
+  } finally {
+    fs.rmSync(scriptPath, { force: true });
+  }
+};
 
 export const findWindowsVcvars = () => {
   if (process.platform !== "win32") {
@@ -211,20 +251,5 @@ export const runTauriBuild = (extraArgs = []) => {
     return;
   }
 
-  const tauriArgs = extraArgs.map(quoteForCmd).join(" ");
-  const tauriCommand = [
-    "call",
-    quoteForCmd(vcvarsPath),
-    "&&",
-    "npm",
-    "run",
-    "tauri",
-    "build",
-    ...(tauriArgs ? ["--", tauriArgs] : []),
-  ].join(" ");
-
-  runCommand({
-    command: "cmd.exe",
-    args: ["/d", "/s", "/c", tauriCommand],
-  });
+  runWindowsTauriBuild(vcvarsPath, extraArgs);
 };
