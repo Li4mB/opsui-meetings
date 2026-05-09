@@ -480,8 +480,8 @@ export const CreateMeetingPanel = ({ isSubmitting, onSubmit }: Props) => {
 
             {error ? <div className="form-error">{error}</div> : null}
             {successMessage ? (
-              <div className="meeting-created-toast" role="status" aria-live="polite">
-                <span className="meeting-created-toast__icon">
+              <div className="create-meeting-success" role="status" aria-live="polite">
+                <span className="create-meeting-success__icon">
                   <svg aria-hidden="true" fill="none" viewBox="0 0 16 16">
                     <path
                       d="M3.5 8.5 6.5 11.5 12.5 5.5"
