@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+﻿import { useEffect } from "react";
 import type {
   AiMeetingGuide,
   AiMeetingGuideBinding,
@@ -379,7 +379,7 @@ export const AppShell = ({
               <section className="sidebar-panel">
                 <div className="sidebar-section__label">Quick guidance</div>
                 <div className="sidebar-meta">
-                  <div>Use the client’s direct contact details.</div>
+                  <div>Use the clientâ€™s direct contact details.</div>
                   <div>Select every module they mention.</div>
                   <div>Save the request once the preferred date and time are confirmed.</div>
                   {syncMessage ? <div>{syncMessage}</div> : null}
@@ -422,7 +422,7 @@ export const AppShell = ({
                     <>
                       <div>{currentMeeting.company}</div>
                       <div>
-                        {getCountryFlag(currentMeeting.country)} {currentMeeting.country} ·{" "}
+                        {getCountryFlag(currentMeeting.country)} {currentMeeting.country} Â·{" "}
                         {currentMeeting.meetingType}
                       </div>
                       <div>
@@ -479,8 +479,8 @@ export const AppShell = ({
                   onClick={() => onSetFilters({ assignedUserId: "all" })}
                   type="button"
                 >
-                  <span className="sidebar-filter__flag">TM</span>
-                  <span>All members</span>
+                  <span className="sidebar-filter__marker sidebar-filter__flag">TM</span>
+                  <span className="sidebar-filter__label">All members</span>
                   <span className="sidebar-filter__count">{scopedMeetings.length}</span>
                 </button>
 
@@ -489,8 +489,8 @@ export const AppShell = ({
                   onClick={() => onSetFilters({ assignedUserId: "" })}
                   type="button"
                 >
-                  <span className="sidebar-filter__flag">⚠</span>
-                  <span>Unassigned</span>
+                  <span className="sidebar-filter__marker sidebar-filter__warning">⚠</span>
+                  <span className="sidebar-filter__label">Unassigned</span>
                   <span className="sidebar-filter__count">{unassignedCount}</span>
                 </button>
 
@@ -501,11 +501,13 @@ export const AppShell = ({
                     onClick={() => onSetFilters({ assignedUserId: user.id })}
                     type="button"
                   >
-                    <span
-                      className="sidebar-filter__dot"
-                      style={{ background: user.colorHex }}
-                    />
-                    <span>{user.displayName}</span>
+                    <span className="sidebar-filter__marker" aria-hidden="true">
+                      <span
+                        className="sidebar-filter__dot"
+                        style={{ background: user.colorHex }}
+                      />
+                    </span>
+                    <span className="sidebar-filter__label">{user.displayName}</span>
                     <span className="sidebar-filter__count">
                       {countMeetingsForUser(scopedMeetings, user.id)}
                     </span>

@@ -3,6 +3,7 @@ import {
   useDeferredValue,
   useEffect,
   useEffectEvent,
+  useRef,
   useState,
 } from "react";
 import type {
@@ -74,6 +75,7 @@ import {
 
 type BootState = "loading" | "ready" | "error";
 const STARTUP_TIMEOUT_MS = 3000;
+const UPDATE_POLL_INTERVAL_MS = 2 * 60 * 1000;
 
 async function withTimeout<T>(promise: Promise<T>, fallback: T): Promise<T> {
   return Promise.race([
@@ -123,6 +125,7 @@ const App = () => {
   const [updateState, setUpdateState] = useState<UpdateState>(
     updaterEnabled ? { status: "checking" } : { status: "ready" },
   );
+  const updateCheckInFlight = useRef(false);
   const deferredQuery = useDeferredValue(filters.query.trim().toLowerCase());
 
   const selectedMeeting =
@@ -691,17 +694,28 @@ const App = () => {
 
     let active = true;
 
-    const checkAndInstallUpdate = async () => {
-      setUpdateState({ status: "checking" });
+    const checkAndInstallUpdate = async (showCheckingScreen = false) => {
+      if (updateCheckInFlight.current) {
+        return;
+      }
+
+      updateCheckInFlight.current = true;
+
+      if (showCheckingScreen) {
+        setUpdateState({ status: "checking" });
+      }
 
       const update = await checkForAppUpdate();
+      updateCheckInFlight.current = false;
 
       if (!active) {
         return;
       }
 
       if (!update) {
-        setUpdateState({ status: "ready" });
+        if (showCheckingScreen) {
+          setUpdateState({ status: "ready" });
+        }
         return;
       }
 
@@ -715,10 +729,22 @@ const App = () => {
       void handleInstallUpdateEvent(update);
     };
 
-    void checkAndInstallUpdate();
+    void checkAndInstallUpdate(true);
+
+    const updateInterval = window.setInterval(() => {
+      void checkAndInstallUpdate();
+    }, UPDATE_POLL_INTERVAL_MS);
+
+    const handleWindowFocus = () => {
+      void checkAndInstallUpdate();
+    };
+
+    window.addEventListener("focus", handleWindowFocus);
 
     return () => {
       active = false;
+      window.clearInterval(updateInterval);
+      window.removeEventListener("focus", handleWindowFocus);
     };
   }, [updaterEnabled]);
 
