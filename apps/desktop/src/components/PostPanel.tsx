@@ -255,6 +255,31 @@ export const PostPanel = ({ authToken }: Props) => {
   const imagePromptCount = imagePrompt.length;
   const captionCount = caption.length;
   const hasImages = images.length > 0;
+  const readinessChecks = [
+    {
+      label: "Caption",
+      ready: normalizedCaption.length >= 80,
+      copy: normalizedCaption.length >= 80 ? "Strong length" : "Add more detail",
+    },
+    {
+      label: "Images",
+      ready: hasImages,
+      copy: hasImages ? `${images.length} ready` : "Add or generate one",
+    },
+    {
+      label: "Tags",
+      ready: tags.length >= 4,
+      copy: tags.length >= 4 ? `${tags.length} tags` : "Add more tags",
+    },
+    {
+      label: "Prompt",
+      ready: prompt.trim().length >= 30 || imagePrompt.trim().length >= 30,
+      copy: "Creative direction",
+    },
+  ];
+  const readinessScore = Math.round(
+    (readinessChecks.filter((check) => check.ready).length / readinessChecks.length) * 100,
+  );
 
   const previewTime = useMemo(
     () =>
@@ -729,6 +754,27 @@ export const PostPanel = ({ authToken }: Props) => {
                 <span>{tags.length} tag{tags.length === 1 ? "" : "s"}</span>
               </div>
             </article>
+
+            <section className="post-readiness">
+              <div className="post-readiness__top">
+                <span className="eyebrow">Readiness</span>
+                <strong>{readinessScore}%</strong>
+              </div>
+              <div className="post-readiness__bar">
+                <span style={{ width: `${readinessScore}%` }} />
+              </div>
+              <div className="post-readiness__checks">
+                {readinessChecks.map((check) => (
+                  <div
+                    className={`post-readiness__check ${check.ready ? "post-readiness__check--ready" : ""}`}
+                    key={check.label}
+                  >
+                    <span>{check.label}</span>
+                    <small>{check.copy}</small>
+                  </div>
+                ))}
+              </div>
+            </section>
           </aside>
         </div>
       </div>
