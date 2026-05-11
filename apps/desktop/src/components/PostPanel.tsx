@@ -1,11 +1,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import opsLogo from "../assets/op.png";
+import { generatePostContent, generatePostImage } from "../lib/api";
 
 type PostImage = {
   id: string;
   name: string;
   url: string;
   generated: boolean;
+};
+
+type Props = {
+  authToken: string;
 };
 
 const defaultTags = ["opsui", "meetings", "demo"];
@@ -116,6 +121,66 @@ const buildPosterCopy = (input: { tags: string[]; imageCount: number }) => {
   };
 };
 
+const isCrmPipelinePrompt = (value: string) => {
+  const normalized = value.toLowerCase();
+
+  return (
+    normalized.includes("pipeline") &&
+    normalized.includes("crm")
+  );
+};
+
+const buildCrmPipelinePosterSvg = () =>
+  [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900" viewBox="0 0 1200 900">`,
+    `<defs>`,
+    `<radialGradient id="purpleGlow" cx="72%" cy="26%" r="64%"><stop offset="0%" stop-color="#7B5CFF" stop-opacity="0.34"/><stop offset="100%" stop-color="#7B5CFF" stop-opacity="0"/></radialGradient>`,
+    `<radialGradient id="redGlow" cx="78%" cy="68%" r="58%"><stop offset="0%" stop-color="#ff304d" stop-opacity="0.2"/><stop offset="100%" stop-color="#ff304d" stop-opacity="0"/></radialGradient>`,
+    `<pattern id="grid" width="42" height="42" patternUnits="userSpaceOnUse"><path d="M42 0H0V42" fill="none" stroke="#ffffff" stroke-opacity="0.045" stroke-width="1"/></pattern>`,
+    `<filter id="fakeGlow"><feGaussianBlur stdDeviation="4" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>`,
+    `</defs>`,
+    `<rect width="1200" height="900" fill="#0A0A0F"/>`,
+    `<rect width="1200" height="900" fill="url(#grid)" opacity="0.42"/>`,
+    `<rect width="1200" height="900" fill="url(#purpleGlow)"/>`,
+    `<rect width="1200" height="900" fill="url(#redGlow)"/>`,
+    `<text x="72" y="104" fill="#8b8da3" font-family="Arial, sans-serif" font-size="20" font-weight="700" letter-spacing="6">CRM REALITY CHECK</text>`,
+    `<text x="72" y="194" fill="#ffffff" font-family="Arial Black, Arial, sans-serif" font-size="70" font-weight="900">YOUR PIPELINE IS</text>`,
+    `<text x="72" y="280" fill="#7B5CFF" filter="url(#fakeGlow)" font-family="Arial Black, Arial, sans-serif" font-size="96" font-weight="900">PROBABLY FAKE.</text>`,
+    `<text x="76" y="336" fill="#d6d8e8" font-family="Arial, sans-serif" font-size="27">Your CRM shows what people say.</text>`,
+    `<text x="76" y="374" fill="#d6d8e8" font-family="Arial, sans-serif" font-size="27">Not what's actually happening.</text>`,
+    `<rect x="70" y="438" width="505" height="344" rx="24" fill="#11141a" stroke="#2ee77b" stroke-opacity="0.34"/>`,
+    `<rect x="625" y="438" width="505" height="344" rx="24" fill="#141014" stroke="#ff385a" stroke-opacity="0.42"/>`,
+    `<text x="104" y="488" fill="#2ee77b" font-family="Arial, sans-serif" font-size="22" font-weight="800" letter-spacing="3">CRM VIEW</text>`,
+    `<text x="659" y="488" fill="#ff536d" font-family="Arial, sans-serif" font-size="22" font-weight="800" letter-spacing="3">REALITY</text>`,
+    `<rect x="104" y="522" width="424" height="58" rx="14" fill="#151d19" stroke="#2ee77b" stroke-opacity="0.22"/>`,
+    `<circle cx="134" cy="551" r="12" fill="#2ee77b"/><path d="M128 551l5 5 9-11" stroke="#06110a" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`,
+    `<text x="166" y="545" fill="#ffffff" font-family="Arial, sans-serif" font-size="20" font-weight="700">Deal: Closing this week</text>`,
+    `<text x="166" y="568" fill="#8ea79a" font-family="Arial, sans-serif" font-size="15">High confidence</text>`,
+    `<rect x="104" y="604" width="424" height="58" rx="14" fill="#151d19" stroke="#2ee77b" stroke-opacity="0.18"/>`,
+    `<circle cx="134" cy="633" r="12" fill="#2ee77b"/><path d="M128 633l5 5 9-11" stroke="#06110a" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`,
+    `<text x="166" y="627" fill="#ffffff" font-family="Arial, sans-serif" font-size="20" font-weight="700">Lead: Hot</text>`,
+    `<text x="166" y="650" fill="#8ea79a" font-family="Arial, sans-serif" font-size="15">Priority account</text>`,
+    `<rect x="104" y="686" width="424" height="58" rx="14" fill="#151d19" stroke="#2ee77b" stroke-opacity="0.18"/>`,
+    `<circle cx="134" cy="715" r="12" fill="#2ee77b"/><path d="M128 715l5 5 9-11" stroke="#06110a" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`,
+    `<text x="166" y="709" fill="#ffffff" font-family="Arial, sans-serif" font-size="20" font-weight="700">Follow-up: Done</text>`,
+    `<text x="166" y="732" fill="#8ea79a" font-family="Arial, sans-serif" font-size="15">Activity complete</text>`,
+    `<rect x="659" y="522" width="424" height="58" rx="14" fill="#201116" stroke="#ff385a" stroke-opacity="0.26"/>`,
+    `<text x="690" y="558" fill="#ff536d" font-family="Arial, sans-serif" font-size="26" font-weight="900">!</text>`,
+    `<text x="730" y="545" fill="#ffffff" font-family="Arial, sans-serif" font-size="20" font-weight="700">No reply in 5 days</text>`,
+    `<text x="730" y="568" fill="#b78e98" font-family="Arial, sans-serif" font-size="15">Deal risk rising</text>`,
+    `<rect x="659" y="604" width="424" height="58" rx="14" fill="#201116" stroke="#ff385a" stroke-opacity="0.22"/>`,
+    `<text x="690" y="640" fill="#ff536d" font-family="Arial, sans-serif" font-size="26" font-weight="900">!</text>`,
+    `<text x="730" y="627" fill="#ffffff" font-family="Arial, sans-serif" font-size="20" font-weight="700">Lead has gone cold</text>`,
+    `<text x="730" y="650" fill="#b78e98" font-family="Arial, sans-serif" font-size="15">No buying signal</text>`,
+    `<rect x="659" y="686" width="424" height="58" rx="14" fill="#201116" stroke="#ff385a" stroke-opacity="0.22"/>`,
+    `<text x="690" y="722" fill="#ff536d" font-family="Arial, sans-serif" font-size="26" font-weight="900">!</text>`,
+    `<text x="730" y="709" fill="#ffffff" font-family="Arial, sans-serif" font-size="20" font-weight="700">Follow-up opened, not read</text>`,
+    `<text x="730" y="732" fill="#b78e98" font-family="Arial, sans-serif" font-size="15">Activity logged, intent missing</text>`,
+    `<line x1="600" y1="438" x2="600" y2="782" stroke="#7B5CFF" stroke-opacity="0.24" stroke-width="2"/>`,
+    `<text x="72" y="840" fill="#7B5CFF" font-family="Arial, sans-serif" font-size="20" font-weight="800">OPSUI PIPELINE INTELLIGENCE</text>`,
+    `</svg>`,
+  ].join("");
+
 const buildOptimizedCaption = (input: {
   prompt: string;
   tags: string[];
@@ -163,7 +228,7 @@ const buildOptimizedCaption = (input: {
   return templates[input.variant % templates.length].join("\n\n");
 };
 
-export const PostPanel = () => {
+export const PostPanel = ({ authToken }: Props) => {
   const [prompt, setPrompt] = useState(
     "Create a polished social post about the OpsUI team preparing better meetings, cleaner handovers, and stronger demo follow-up.",
   );
@@ -172,10 +237,13 @@ export const PostPanel = () => {
   );
   const [images, setImages] = useState<PostImage[]>([]);
   const imagesRef = useRef<PostImage[]>([]);
+  const captionInputRef = useRef<HTMLTextAreaElement | null>(null);
   const captionVariantRef = useRef(0);
   const [tagInput, setTagInput] = useState("");
   const [tags, setTags] = useState<string[]>(defaultTags);
   const [saveNotice, setSaveNotice] = useState<string | null>(null);
+  const [isGeneratingCaption, setIsGeneratingCaption] = useState(false);
+  const [isGeneratingImage, setIsGeneratingImage] = useState(false);
 
   const normalizedCaption = caption.trim();
   const postCaption = normalizedCaption || "Write a caption to preview it here.";
@@ -219,6 +287,17 @@ export const PostPanel = () => {
     };
   }, [saveNotice]);
 
+  useEffect(() => {
+    const captionInput = captionInputRef.current;
+
+    if (!captionInput) {
+      return;
+    }
+
+    captionInput.style.height = "auto";
+    captionInput.style.height = `${captionInput.scrollHeight}px`;
+  }, [caption]);
+
   const addTag = (value: string) => {
     const nextTag = value.trim().replace(/^#/, "").toLowerCase();
 
@@ -242,25 +321,46 @@ export const PostPanel = () => {
     );
   };
 
-  const handleGenerateCaption = () => {
+  const handleGenerateCaption = async () => {
     const source = prompt.trim() || caption.trim();
     const nextTags = extractTags(source);
-    captionVariantRef.current += 1;
-    const variant = captionVariantRef.current + Math.floor(Math.random() * 4);
-    const generatedCaption = buildOptimizedCaption({
-      prompt: source,
-      tags: nextTags,
-      imageCount: images.length,
-      variant,
-    });
 
-    setCaption(generatedCaption);
-    mergeTags(nextTags);
+    setIsGeneratingCaption(true);
+
+    try {
+      const generated = await generatePostContent(authToken, {
+        prompt: source,
+        currentCaption: caption,
+        imageNames: images.map((image) => image.name),
+        tags,
+      });
+
+      setCaption(generated.caption);
+      mergeTags(generated.tags);
+      setSaveNotice("Caption generated with ChatGPT.");
+    } catch {
+      captionVariantRef.current += 1;
+      const variant = captionVariantRef.current + Math.floor(Math.random() * 4);
+      const generatedCaption = buildOptimizedCaption({
+        prompt: source,
+        tags: nextTags,
+        imageCount: images.length,
+        variant,
+      });
+
+      setCaption(generatedCaption);
+      mergeTags(nextTags);
+      setSaveNotice("ChatGPT unavailable. Used local caption fallback.");
+    } finally {
+      setIsGeneratingCaption(false);
+    }
   };
 
-  const handleGenerateImage = () => {
-    const source = prompt.trim() || caption.trim() || "OpsUI Meetings content";
-    const nextTags = extractTags(source);
+  const buildLocalGeneratedImage = (source: string, nextTags: string[]): PostImage => {
+    const imageName = `${slugify(source)}-${images.length + 1}.svg`;
+    const svg = isCrmPipelinePrompt(source)
+      ? buildCrmPipelinePosterSvg()
+      : (() => {
     const posterCopy = buildPosterCopy({
       tags: nextTags,
       imageCount: images.length,
@@ -272,8 +372,7 @@ export const PostPanel = () => {
     const accent = "#d6ad2d";
     const accentSoft = "#f3d977";
     const text = "#fff6d8";
-    const imageName = `${slugify(source)}-${images.length + 1}.svg`;
-    const svg = [
+    return [
       `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900" viewBox="0 0 1200 900">`,
       `<rect width="1200" height="900" fill="${base}"/>`,
       `<rect x="0" y="0" width="1200" height="900" fill="url(#grid)" opacity="0.18"/>`,
@@ -304,15 +403,46 @@ export const PostPanel = () => {
       `<text x="116" y="768" fill="#d6d0c2" opacity="0.72" font-family="Arial, sans-serif" font-size="22">${escapeSvgText(nextTags.slice(0, 5).map((tag) => `#${tag}`).join(" "))}</text>`,
       `</svg>`,
     ].join("");
-    const image = {
+      })();
+    return {
       id: `generated-${Date.now()}-${crypto.randomUUID()}`,
       name: imageName,
       url: URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" })),
       generated: true,
     };
+  };
 
-    setImages((current) => [...current, image].slice(0, 6));
-    mergeTags(nextTags);
+  const handleGenerateImage = async () => {
+    const source = prompt.trim() || caption.trim() || "OpsUI Meetings content";
+    const nextTags = extractTags(source);
+
+    setIsGeneratingImage(true);
+
+    try {
+      const generated = await generatePostImage(authToken, {
+        prompt: source,
+        caption,
+        tags,
+      });
+      const image = {
+        id: `generated-${Date.now()}-${crypto.randomUUID()}`,
+        name: generated.fileName,
+        url: generated.imageDataUrl,
+        generated: true,
+      };
+
+      setImages((current) => [...current, image].slice(0, 6));
+      mergeTags(generated.tags);
+      setSaveNotice("Image generated with ChatGPT.");
+    } catch {
+      const image = buildLocalGeneratedImage(source, nextTags);
+
+      setImages((current) => [...current, image].slice(0, 6));
+      mergeTags(nextTags);
+      setSaveNotice("ChatGPT unavailable. Used local image fallback.");
+    } finally {
+      setIsGeneratingImage(false);
+    }
   };
 
   const saveGeneratedImage = async (image: PostImage) => {
@@ -405,7 +535,7 @@ export const PostPanel = () => {
                 Prompt
                 <textarea
                   className="post-caption-input"
-                  maxLength={1200}
+                  maxLength={4000}
                   onChange={(event) => setPrompt(event.target.value)}
                   placeholder="Describe what the caption should say, tone, audience, and key points..."
                   rows={8}
@@ -415,12 +545,13 @@ export const PostPanel = () => {
               <div className="post-section-actions">
                 <button
                   className="post-generate-btn"
-                  onClick={handleGenerateCaption}
+                  disabled={isGeneratingCaption}
+                  onClick={() => void handleGenerateCaption()}
                   type="button"
                 >
-                  Generate caption and tags
+                  {isGeneratingCaption ? "Generating..." : "Generate caption and tags"}
                 </button>
-                <span className="post-field-meta">{promptCount}/1200 prompt characters</span>
+                <span className="post-field-meta">{promptCount}/4000 prompt characters</span>
               </div>
             </section>
 
@@ -446,10 +577,11 @@ export const PostPanel = () => {
 
               <button
                 className="post-generate-btn post-generate-btn--wide"
-                onClick={handleGenerateImage}
+                disabled={isGeneratingImage}
+                onClick={() => void handleGenerateImage()}
                 type="button"
               >
-                Generate image from prompt
+                {isGeneratingImage ? "Generating image..." : "Generate image from prompt"}
               </button>
 
               {hasImages ? (
@@ -535,6 +667,7 @@ export const PostPanel = () => {
               <label className="post-preview__caption-editor">
                 <span>Caption</span>
                 <textarea
+                  ref={captionInputRef}
                   className="post-preview__caption-input"
                   maxLength={2200}
                   onChange={(event) => setCaption(event.target.value)}

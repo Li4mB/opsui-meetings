@@ -40,6 +40,38 @@ export const aiMeetingGuideBindingSchema = z.object({
   locked: z.boolean(),
 });
 
+export const aiPostContentRequestSchema = z.object({
+  prompt: z.string().min(1).max(8000),
+  currentCaption: z.string().max(2200).optional(),
+  imageNames: z.array(z.string()).max(6).default([]),
+  tags: z.array(z.string()).max(12).default([]),
+});
+
+export const aiPostContentSchema = z.object({
+  caption: z.string().min(1).max(2200),
+  tags: z.array(z.string()).min(1).max(12),
+  generatedAt: z.string(),
+  model: z.string(),
+});
+
+export const aiPostImageRequestSchema = z.object({
+  prompt: z.string().min(1).max(8000),
+  caption: z.string().max(2200).optional(),
+  tags: z.array(z.string()).max(12).default([]),
+});
+
+export const aiPostImageSchema = z.object({
+  imageDataUrl: z.string().min(1),
+  fileName: z.string().min(1),
+  tags: z.array(z.string()).max(12),
+  generatedAt: z.string(),
+  model: z.string(),
+});
+
 export type AiMeetingGuide = z.infer<typeof aiMeetingGuideSchema>;
 export type AiMeetingGuideRequest = z.infer<typeof aiMeetingGuideRequestSchema>;
 export type AiMeetingGuideBinding = z.infer<typeof aiMeetingGuideBindingSchema>;
+export type AiPostContent = z.infer<typeof aiPostContentSchema>;
+export type AiPostContentRequest = z.infer<typeof aiPostContentRequestSchema>;
+export type AiPostImage = z.infer<typeof aiPostImageSchema>;
+export type AiPostImageRequest = z.infer<typeof aiPostImageRequestSchema>;

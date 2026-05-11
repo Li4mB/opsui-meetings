@@ -3,6 +3,10 @@ import {
   aiMeetingGuideBindingSchema,
   aiMeetingGuideRequestSchema,
   aiMeetingGuideSchema,
+  aiPostContentRequestSchema,
+  aiPostContentSchema,
+  aiPostImageRequestSchema,
+  aiPostImageSchema,
   authBootstrapSchema,
   authMeSchema,
   assignmentInputSchema,
@@ -227,6 +231,34 @@ export const saveMeetingGuide = (
       body: JSON.stringify(aiMeetingGuideSchema.parse(guide)),
     },
     aiMeetingGuideBindingSchema,
+  );
+
+export const generatePostContent = (
+  token: string,
+  input: z.infer<typeof aiPostContentRequestSchema>,
+) =>
+  request(
+    "/ai/post-content",
+    {
+      method: "POST",
+      headers: withToken(token),
+      body: JSON.stringify(aiPostContentRequestSchema.parse(input)),
+    },
+    aiPostContentSchema,
+  );
+
+export const generatePostImage = (
+  token: string,
+  input: z.infer<typeof aiPostImageRequestSchema>,
+) =>
+  request(
+    "/ai/post-image",
+    {
+      method: "POST",
+      headers: withToken(token),
+      body: JSON.stringify(aiPostImageRequestSchema.parse(input)),
+    },
+    aiPostImageSchema,
   );
 
 export const unlockMeetingGuide = (token: string, meetingId: string) =>

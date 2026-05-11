@@ -612,9 +612,7 @@ export const AppShell = ({
               isSubmitting={syncStatus === "syncing"}
               onSubmit={onCreateMeetingRequest}
             />
-          ) : activeSurfaceMode === "post" ? (
-            <PostPanel />
-          ) : activeSurfaceMode === "current" ? (
+          ) : activeSurfaceMode === "post" ? null : activeSurfaceMode === "current" ? (
             <CurrentMeetingPanel
               meeting={currentMeeting}
               onClear={onClearCurrentMeeting}
@@ -734,6 +732,9 @@ export const AppShell = ({
               </div>
             </>
           )}
+          <div className="post-surface" hidden={activeSurfaceMode !== "post"}>
+            <PostPanel authToken={session.token} />
+          </div>
         </main>
       </div>
     </div>

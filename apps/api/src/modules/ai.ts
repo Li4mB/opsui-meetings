@@ -5,6 +5,10 @@ import {
   aiMeetingGuideBindingSchema,
   aiMeetingGuideRequestSchema,
   aiMeetingGuideSchema,
+  aiPostContentRequestSchema,
+  aiPostContentSchema,
+  aiPostImageRequestSchema,
+  aiPostImageSchema,
   meetingSchema,
 } from "@opsui/shared";
 import { storage } from "../db/database.js";
@@ -87,6 +91,53 @@ const buildGuidePrompt = (meeting: ReturnType<typeof toMeeting>) =>
     formatMeetingContext(meeting),
   ].join("\n");
 
+const normalizeTags = (tags: string[]) =>
+  tags
+    .map((tag) => tag.trim().replace(/^#/, "").toLowerCase())
+    .filter(Boolean)
+    .filter((tag, index, allTags) => allTags.indexOf(tag) === index)
+    .slice(0, 12);
+
+const buildPostContentPrompt = (input: {
+  prompt: string;
+  currentCaption?: string;
+  imageNames: string[];
+  tags: string[];
+}) =>
+  [
+    "Create social post content from the user's prompt.",
+    "Do not copy the prompt directly into the caption.",
+    "Write a polished, post-ready caption that suits the prompt, image context, and brand tone.",
+    "If the prompt asks for a poster or visual concept, make the caption support the visual instead of repeating every design instruction.",
+    "Return relevant lowercase tags without # symbols.",
+    "",
+    `Prompt:\n${input.prompt}`,
+    input.currentCaption ? `Current caption:\n${input.currentCaption}` : "",
+    input.imageNames.length ? `Images:\n${input.imageNames.join(", ")}` : "Images: none",
+    input.tags.length ? `Existing tags:\n${input.tags.join(", ")}` : "Existing tags: none",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
+const buildImagePrompt = (input: {
+  prompt: string;
+  caption?: string;
+  tags: string[];
+}) =>
+  [
+    "Generate one premium social media image for OpsUI based on the user prompt.",
+    "Do not paste the full prompt into the image.",
+    "Use only short, intentional poster copy if text is needed.",
+    "Keep the image clean, bold, and instantly readable.",
+    "For CRM / sales pipeline prompts: create a high-end dark cinematic SaaS poster, #0A0A0F background, white typography, purple #7B5CFF glow, subtle cyberpunk UI, one dominant message, split CRM view vs reality if requested.",
+    "",
+    `User prompt:\n${input.prompt}`,
+    input.caption ? `Caption context:\n${input.caption}` : "",
+    input.tags.length ? `Tags:\n${input.tags.join(", ")}` : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+
 const getMeetingById = async (meetingId: string) => {
   const row = await storage.findMeetingByIdIncludingPast(meetingId);
   return row ? toMeeting(row) : null;
@@ -109,6 +160,95 @@ const getBoundGuideByGoogleEventId = async (googleEventId: string) => {
 };
 
 export const registerAiRoutes = (app: import("fastify").FastifyInstance) => {
+  app.post(
+    "/ai/post-content",
+    { preHandler: [authenticateRequest] },
+    async (request, reply) => {
+      if (!openai) {
+        return reply.status(503).send({
+          message:
+            "OpenAI is not configured yet. Add OPENAI_API_KEY to apps/api/.env to enable post generation.",
+        });
+      }
+
+      const input = aiPostContentRequestSchema.parse(request.body);
+      const response = await openai.responses.parse({
+        model: env.openAiModel,
+        input: [
+          {
+            role: "developer",
+            content:
+              "You are OpsUI's social content generator. Produce concise, premium SaaS marketing captions and relevant tags. Never copy the full prompt as the caption.",
+          },
+          {
+            role: "user",
+            content: buildPostContentPrompt(input),
+          },
+        ],
+        text: {
+          format: zodTextFormat(aiPostContentSchema.omit({
+            generatedAt: true,
+            model: true,
+          }), "opsui_post_content"),
+          verbosity: "medium",
+        },
+      });
+
+      if (!response.output_parsed) {
+        return reply.badRequest("The post content could not be generated.");
+      }
+
+      return aiPostContentSchema.parse({
+        ...response.output_parsed,
+        tags: normalizeTags(response.output_parsed.tags),
+        generatedAt: new Date().toISOString(),
+        model: env.openAiModel,
+      });
+    },
+  );
+
+  app.post(
+    "/ai/post-image",
+    { preHandler: [authenticateRequest] },
+    async (request, reply) => {
+      if (!openai) {
+        return reply.status(503).send({
+          message:
+            "OpenAI is not configured yet. Add OPENAI_API_KEY to apps/api/.env to enable image generation.",
+        });
+      }
+
+      const input = aiPostImageRequestSchema.parse(request.body);
+      const tags = normalizeTags(input.tags);
+      const response = await openai.images.generate({
+        model: env.openAiImageModel,
+        prompt: buildImagePrompt({
+          prompt: input.prompt,
+          caption: input.caption,
+          tags,
+        }),
+        n: 1,
+        size: "1536x1024",
+        quality: "high",
+        output_format: "jpeg",
+      });
+      const image = response.data?.[0];
+      const imageData = image?.b64_json;
+
+      if (!imageData) {
+        return reply.badRequest("The post image could not be generated.");
+      }
+
+      return aiPostImageSchema.parse({
+        imageDataUrl: `data:image/jpeg;base64,${imageData}`,
+        fileName: `opsui-post-${Date.now()}.jpg`,
+        tags,
+        generatedAt: new Date().toISOString(),
+        model: env.openAiImageModel,
+      });
+    },
+  );
+
   app.get(
     "/ai/meeting-guide/:meetingId",
     { preHandler: [authenticateRequest] },
