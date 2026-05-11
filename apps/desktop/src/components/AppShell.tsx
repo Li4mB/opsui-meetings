@@ -25,6 +25,7 @@ import { CurrentMeetingPanel } from "./CurrentMeetingPanel";
 import { MeetingCalendar } from "./MeetingCalendar";
 import { MeetingDetailDrawer } from "./MeetingDetailDrawer";
 import { MeetingList } from "./MeetingList";
+import { PostPanel } from "./PostPanel";
 
 type Props = {
   session: Session;
@@ -258,6 +259,13 @@ export const AppShell = ({
             >
               Create Meeting
             </button>
+            <button
+              className={`app-nav__item ${activeSurfaceMode === "post" ? "app-nav__item--active" : ""}`}
+              onClick={() => onSetSurfaceMode("post")}
+              type="button"
+            >
+              Post
+            </button>
             {currentMeeting ? (
               <button
                 className={`app-nav__item ${activeSurfaceMode === "current" ? "app-nav__item--active" : ""}`}
@@ -383,6 +391,26 @@ export const AppShell = ({
                   <div>Select every module they mention.</div>
                   <div>Save the request once the preferred date and time are confirmed.</div>
                   {syncMessage ? <div>{syncMessage}</div> : null}
+                </div>
+              </section>
+            </>
+          ) : activeSurfaceMode === "post" ? (
+            <>
+              <section className="sidebar-panel">
+                <div className="sidebar-section__label">Post workspace</div>
+                <div className="sidebar-panel__title">Create Content</div>
+                <div className="sidebar-meta">
+                  Draft captions, attach image assets, and keep tags visible before the
+                  post is shared.
+                </div>
+              </section>
+
+              <section className="sidebar-panel">
+                <div className="sidebar-section__label">Preview flow</div>
+                <div className="sidebar-meta">
+                  <div>Use the left side to build the content.</div>
+                  <div>The live preview updates as captions, images, and tags change.</div>
+                  <div>{syncMessage ?? "Review the full post before publishing."}</div>
                 </div>
               </section>
             </>
@@ -584,6 +612,8 @@ export const AppShell = ({
               isSubmitting={syncStatus === "syncing"}
               onSubmit={onCreateMeetingRequest}
             />
+          ) : activeSurfaceMode === "post" ? (
+            <PostPanel />
           ) : activeSurfaceMode === "current" ? (
             <CurrentMeetingPanel
               meeting={currentMeeting}
