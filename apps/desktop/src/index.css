@@ -2728,6 +2728,11 @@ label {
   resize: vertical;
 }
 
+.post-image-prompt-input {
+  min-height: 138px;
+  resize: vertical;
+}
+
 .post-field-meta {
   color: var(--color-text-muted);
   font-family: var(--font-mono);

@@ -232,6 +232,9 @@ export const PostPanel = ({ authToken }: Props) => {
   const [prompt, setPrompt] = useState(
     "Create a polished social post about the OpsUI team preparing better meetings, cleaner handovers, and stronger demo follow-up.",
   );
+  const [imagePrompt, setImagePrompt] = useState(
+    "Create a premium dark SaaS poster for OpsUI Meetings with clean typography, subtle UI details, and warm gold lighting.",
+  );
   const [caption, setCaption] = useState(
     "Behind the scenes with the OpsUI team: focused calls, cleaner handovers, and better meeting prep.",
   );
@@ -249,6 +252,7 @@ export const PostPanel = ({ authToken }: Props) => {
   const postCaption = normalizedCaption || "Write a caption to preview it here.";
   const postTags = tags.map((tag) => `#${tag}`).join(" ");
   const promptCount = prompt.length;
+  const imagePromptCount = imagePrompt.length;
   const captionCount = caption.length;
   const hasImages = images.length > 0;
 
@@ -413,14 +417,15 @@ export const PostPanel = ({ authToken }: Props) => {
   };
 
   const handleGenerateImage = async () => {
-    const source = prompt.trim() || caption.trim() || "OpsUI Meetings content";
+    const source =
+      imagePrompt.trim() || prompt.trim() || caption.trim() || "OpsUI Meetings content";
     const nextTags = extractTags(source);
 
     setIsGeneratingImage(true);
 
     try {
       const generated = await generatePostImage(authToken, {
-        prompt: source,
+          prompt: source,
         caption,
         tags,
       });
@@ -564,6 +569,19 @@ export const PostPanel = ({ authToken }: Props) => {
                 <span className="eyebrow">Images</span>
                 <h2>Add visuals</h2>
               </div>
+
+              <label>
+                Image Prompt
+                <textarea
+                  className="post-image-prompt-input"
+                  maxLength={8000}
+                  onChange={(event) => setImagePrompt(event.target.value)}
+                  placeholder="Describe the image, poster style, colors, layout, typography, and any visual details..."
+                  rows={6}
+                  value={imagePrompt}
+                />
+              </label>
+              <div className="post-field-meta">{imagePromptCount}/8000 image prompt characters</div>
 
               <label className="post-upload">
                 <span className="post-upload__icon">+</span>
