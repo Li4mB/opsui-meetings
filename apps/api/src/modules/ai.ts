@@ -138,6 +138,52 @@ const buildImagePrompt = (input: {
     .filter(Boolean)
     .join("\n\n");
 
+const generatePostImageWithFallback = async (prompt: string) => {
+  const imageModels = [
+    env.openAiImageModel,
+    "gpt-image-1",
+    "dall-e-3",
+  ].filter((model, index, models) => model && models.indexOf(model) === index);
+  let lastError: unknown;
+
+  for (const model of imageModels) {
+    try {
+      const response = model === "dall-e-3"
+        ? await openai?.images.generate({
+            model,
+            prompt,
+            n: 1,
+            size: "1792x1024",
+            quality: "hd",
+            response_format: "b64_json",
+            style: "vivid",
+          })
+        : await openai?.images.generate({
+            model,
+            prompt,
+            n: 1,
+            size: "1536x1024",
+            quality: "high",
+            output_format: "jpeg",
+          });
+      const imageData = response?.data?.[0]?.b64_json;
+
+      if (imageData) {
+        return {
+          imageData,
+          model,
+        };
+      }
+    } catch (error) {
+      lastError = error;
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("The post image could not be generated.");
+};
+
 const getMeetingById = async (meetingId: string) => {
   const row = await storage.findMeetingByIdIncludingPast(meetingId);
   return row ? toMeeting(row) : null;
@@ -220,31 +266,20 @@ export const registerAiRoutes = (app: import("fastify").FastifyInstance) => {
 
       const input = aiPostImageRequestSchema.parse(request.body);
       const tags = normalizeTags(input.tags);
-      const response = await openai.images.generate({
-        model: env.openAiImageModel,
-        prompt: buildImagePrompt({
+      const generatedImage = await generatePostImageWithFallback(
+        buildImagePrompt({
           prompt: input.prompt,
           caption: input.caption,
           tags,
         }),
-        n: 1,
-        size: "1536x1024",
-        quality: "high",
-        output_format: "jpeg",
-      });
-      const image = response.data?.[0];
-      const imageData = image?.b64_json;
-
-      if (!imageData) {
-        return reply.badRequest("The post image could not be generated.");
-      }
+      );
 
       return aiPostImageSchema.parse({
-        imageDataUrl: `data:image/jpeg;base64,${imageData}`,
+        imageDataUrl: `data:image/jpeg;base64,${generatedImage.imageData}`,
         fileName: `opsui-post-${Date.now()}.jpg`,
         tags,
         generatedAt: new Date().toISOString(),
-        model: env.openAiImageModel,
+        model: generatedImage.model,
       });
     },
   );

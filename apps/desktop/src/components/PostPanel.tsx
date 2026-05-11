@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import opsLogo from "../assets/op.png";
-import { generatePostContent, generatePostImage } from "../lib/api";
+import { ApiError, generatePostContent, generatePostImage } from "../lib/api";
 
 type PostImage = {
   id: string;
@@ -434,12 +434,16 @@ export const PostPanel = ({ authToken }: Props) => {
       setImages((current) => [...current, image].slice(0, 6));
       mergeTags(generated.tags);
       setSaveNotice("Image generated with ChatGPT.");
-    } catch {
+    } catch (error) {
       const image = buildLocalGeneratedImage(source, nextTags);
+      const message =
+        error instanceof ApiError
+          ? `ChatGPT image failed: ${error.message}. Used local fallback.`
+          : "ChatGPT unavailable. Used local image fallback.";
 
       setImages((current) => [...current, image].slice(0, 6));
       mergeTags(nextTags);
-      setSaveNotice("ChatGPT unavailable. Used local image fallback.");
+      setSaveNotice(message);
     } finally {
       setIsGeneratingImage(false);
     }
