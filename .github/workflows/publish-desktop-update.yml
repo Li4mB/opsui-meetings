@@ -1,6 +1,7 @@
 name: Publish Desktop Update
 
 on:
+  workflow_dispatch:
   push:
     branches:
       - main
@@ -24,18 +25,40 @@ jobs:
         with:
           node-version: 22
 
+      - name: Validate desktop updater secrets
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          missing=0
+
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::error::Missing required GitHub secret TAURI_SIGNING_PRIVATE_KEY."
+            missing=1
+          fi
+
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" ]; then
+            echo "::error::Missing required GitHub secret TAURI_SIGNING_PRIVATE_KEY_PASSWORD."
+            missing=1
+          fi
+
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
       - name: Calculate desktop release version
         id: version
         run: |
           base_version="$(node -p "require('./apps/desktop/package.json').version")"
           IFS='.' read -r major minor patch <<< "$base_version"
 
-          if [ -z "$major" ] || [ -z "$minor" ]; then
+          if ! [[ "$major" =~ ^[0-9]+$ && "$minor" =~ ^[0-9]+$ && "$patch" =~ ^[0-9]+$ ]]; then
             echo "Desktop version must be semver-like (major.minor.patch)." >&2
             exit 1
           fi
 
-          build_version="${major}.${minor}.${{ github.run_number }}"
+          build_patch=$((patch + GITHUB_RUN_NUMBER))
+          build_version="${major}.${minor}.${build_patch}"
           {
             echo "value=$build_version"
             echo "tag=v$build_version"
@@ -44,13 +67,17 @@ jobs:
   wait_for_render:
     runs-on: ubuntu-latest
     needs: prepare
-    if: ${{ secrets.RENDER_HEALTHCHECK_URL != '' }}
 
     steps:
       - name: Wait for Render healthcheck
         env:
           HEALTH_URL: ${{ secrets.RENDER_HEALTHCHECK_URL }}
         run: |
+          if [ -z "$HEALTH_URL" ]; then
+            echo "RENDER_HEALTHCHECK_URL is not set; skipping Render healthcheck wait."
+            exit 0
+          fi
+
           deadline=$(( $(date +%s) + 900 ))
 
           while [ "$(date +%s)" -lt "$deadline" ]; do
@@ -71,7 +98,7 @@ jobs:
     needs:
       - prepare
       - wait_for_render
-    if: ${{ !cancelled() && needs.prepare.result == 'success' && (needs.wait_for_render.result == 'success' || needs.wait_for_render.result == 'skipped') }}
+    if: ${{ !cancelled() && needs.prepare.result == 'success' && needs.wait_for_render.result == 'success' }}
 
     steps:
       - name: Check out repository
@@ -130,7 +157,7 @@ jobs:
     needs:
       - prepare
       - wait_for_render
-    if: ${{ !cancelled() && needs.prepare.result == 'success' && (needs.wait_for_render.result == 'success' || needs.wait_for_render.result == 'skipped') }}
+    if: ${{ !cancelled() && needs.prepare.result == 'success' && needs.wait_for_render.result == 'success' }}
 
     steps:
       - name: Check out repository

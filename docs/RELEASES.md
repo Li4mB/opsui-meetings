@@ -29,12 +29,19 @@ Current manifests:
 
 The workflow at [`/.github/workflows/publish-desktop-update.yml`](../.github/workflows/publish-desktop-update.yml):
 
-1. calculates a desktop build version from the package minor version and the GitHub Actions run number
-2. optionally waits for the API healthcheck
-3. builds signed Windows artifacts
-4. builds signed macOS artifacts
-5. generates updater manifests for each platform
-6. publishes all assets to one GitHub Release
+1. calculates a desktop build version by adding the GitHub Actions run number to the committed desktop patch version
+2. validates the required updater signing secrets
+3. optionally waits for the API healthcheck
+4. builds signed Windows artifacts
+5. builds signed macOS artifacts
+6. generates updater manifests for each platform
+7. publishes all assets to one GitHub Release
+
+The workflow runs automatically on pushes to `main` and can also be run manually from GitHub Actions with `workflow_dispatch`.
+
+A successful Render deploy does not update installed desktop apps by itself. Render only proves that the API is healthy. Installed Tauri clients update only after the workflow publishes a GitHub Release containing the signed installer, signature, and updater manifest assets.
+
+If the app does not update after Render is green, check the latest `Publish Desktop Update` workflow run first. There should also be a latest GitHub Release with the updater assets listed below attached.
 
 ### Required GitHub secrets
 
