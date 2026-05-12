@@ -46,7 +46,7 @@ if (!fs.existsSync(bundleDir)) {
 }
 
 const bundleEntries = fs.readdirSync(bundleDir);
-const assetName = bundleEntries
+let assetName = bundleEntries
   .filter((entry) => config.fileMatcher.test(entry))
   .sort(
     (left, right) =>
@@ -58,10 +58,29 @@ if (!assetName) {
   throw new Error(`Unable to find an updater artifact for ${platformKey} in ${bundleDir}`);
 }
 
-const signaturePath = path.join(bundleDir, `${assetName}.sig`);
+const assetPath = path.join(bundleDir, assetName);
+let signaturePath = path.join(bundleDir, `${assetName}.sig`);
 
 if (!fs.existsSync(signaturePath)) {
   throw new Error(`Signature file not found for ${assetName}`);
+}
+
+const releaseAssetName = assetName.replace(/\s+/g, ".");
+
+if (releaseAssetName !== assetName) {
+  const releaseAssetPath = path.join(bundleDir, releaseAssetName);
+  const releaseSignaturePath = path.join(bundleDir, `${releaseAssetName}.sig`);
+
+  if (fs.existsSync(releaseAssetPath) || fs.existsSync(releaseSignaturePath)) {
+    throw new Error(`Release artifact already exists for ${releaseAssetName}`);
+  }
+
+  fs.renameSync(assetPath, releaseAssetPath);
+  fs.renameSync(signaturePath, releaseSignaturePath);
+  console.log(`Renamed updater artifact ${assetName} to ${releaseAssetName}`);
+
+  assetName = releaseAssetName;
+  signaturePath = releaseSignaturePath;
 }
 
 const manifest = {
