@@ -50,7 +50,7 @@
         "https://github.com/Li4mB/opsui-meetings/releases/latest/download/{{target}}-{{arch}}.json",
         "https://github.com/Li4mB/opsui-meetings/releases/latest/download/latest.json"
       ],
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEM2RDIyNjNFNkI0M0E3MjYKUldRbXAwTnJQaWJTeGt4SzR3Y2srZS9PbHArcURkRVZoYTl3QWZCTjRpV1AwdHRtMFdkVjZoblkK"
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEQwM0IzQjQ0NjcxNENDREQKUldUZHpCUm5SRHM3ME9zYzJLV3NwTEZyenlYZjVKTkdMTk5jTklGcHFPRDBKSGNGZTc5aXFvQkQK"
     }
   }
 }
