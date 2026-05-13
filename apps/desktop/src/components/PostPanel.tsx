@@ -1,70 +1,133 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { AiPostContent } from "@opsui/shared";
 import opsLogo from "../assets/op.png";
 import { ApiError, generatePostContent, generatePostImage } from "../lib/api";
+
+type SocialPlatform = "facebook" | "linkedin" | "twitter" | "instagram";
+
+type SocialPostDraft = {
+  platform: SocialPlatform;
+  caption: string;
+  customized: boolean;
+  tweakInstruction: string;
+  isTweaking: boolean;
+};
 
 type PostImage = {
   id: string;
   name: string;
   url: string;
   generated: boolean;
+  objectUrl: boolean;
 };
 
 type Props = {
   authToken: string;
 };
 
-const defaultTags = ["opsui", "meetings", "demo"];
-const stopWords = new Set([
-  "about",
-  "after",
-  "and",
-  "before",
-  "better",
-  "cleaner",
-  "create",
-  "demo",
-  "from",
-  "into",
-  "meeting",
-  "meetings",
-  "post",
-  "social",
-  "stronger",
-  "team",
-  "that",
-  "the",
-  "this",
-  "with",
-]);
+type PlatformMeta = {
+  id: SocialPlatform;
+  label: string;
+  shortLabel: string;
+  captionLimit: number;
+  previewMeta: string;
+  styleHint: string;
+};
+
+const socialPlatforms = [
+  {
+    id: "facebook",
+    label: "Facebook",
+    shortLabel: "FB",
+    captionLimit: 4000,
+    previewMeta: "Business page post",
+    styleHint: "Clear, conversational, and discussion-led.",
+  },
+  {
+    id: "linkedin",
+    label: "LinkedIn",
+    shortLabel: "IN",
+    captionLimit: 3000,
+    previewMeta: "Company page update",
+    styleHint: "Authority-led, practical, and easy to skim.",
+  },
+  {
+    id: "twitter",
+    label: "X/Twitter",
+    shortLabel: "X",
+    captionLimit: 280,
+    previewMeta: "Short-form post",
+    styleHint: "Sharp hook, one idea, direct CTA.",
+  },
+  {
+    id: "instagram",
+    label: "Instagram",
+    shortLabel: "IG",
+    captionLimit: 2200,
+    previewMeta: "Feed post",
+    styleHint: "Visual-first, human, hashtag-aware.",
+  },
+] as const satisfies readonly PlatformMeta[];
+
+const platformIds = socialPlatforms.map((platform) => platform.id);
+const platformById = Object.fromEntries(
+  socialPlatforms.map((platform) => [platform.id, platform]),
+) as Record<SocialPlatform, PlatformMeta>;
+const maxCaptionLength = 4000;
+
+const defaultCaptionPrompt =
+  "Create a post about why growing warehouses outgrow spreadsheets when stock accuracy, order flow, and dispatch control start becoming daily problems.";
+
+const defaultImagePrompt =
+  "Create a premium portrait social media image for OpsUI about warehouse visibility and operational control. Make it serious, modern, practical, and designed for Australian and New Zealand operational businesses.";
+
+const fallbackHashtags = [
+  "opsui",
+  "warehousemanagement",
+  "wms",
+  "erp",
+  "stockaccuracy",
+  "operations",
+  "distribution",
+  "anzbusiness",
+];
 
 const buildImageId = (file: File) =>
   `${file.name}-${file.size}-${file.lastModified}-${crypto.randomUUID()}`;
 
-const slugify = (value: string) =>
-  value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/(^-|-$)/g, "")
-    .slice(0, 42) || "opsui-post";
+const revokePostImage = (image: PostImage | null) => {
+  if (image?.objectUrl) {
+    URL.revokeObjectURL(image.url);
+  }
+};
 
-const escapeSvgText = (value: string) =>
-  value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-
-const extractTags = (value: string) => {
+const extractHashtags = (value: string) => {
   const words = value
     .toLowerCase()
-    .match(/[a-z][a-z0-9-]{2,}/g) ?? [];
+    .match(/[a-z][a-z0-9]{3,}/g) ?? [];
+  const stopWords = new Set([
+    "about",
+    "business",
+    "create",
+    "daily",
+    "from",
+    "growing",
+    "into",
+    "post",
+    "social",
+    "that",
+    "their",
+    "this",
+    "when",
+    "with",
+  ]);
 
   return [
-    "opsui",
+    ...fallbackHashtags,
     ...words.filter((word) => !stopWords.has(word)),
-    "content",
-  ].filter((tag, index, allTags) => allTags.indexOf(tag) === index).slice(0, 8);
+  ]
+    .filter((tag, index, allTags) => allTags.indexOf(tag) === index)
+    .slice(0, 14);
 };
 
 const wrapText = (value: string, maxLineLength: number) => {
@@ -81,205 +144,117 @@ const wrapText = (value: string, maxLineLength: number) => {
     }
   }
 
-  return lines.slice(0, 5);
+  return lines.slice(0, 4);
 };
 
-const humanizeTag = (tag: string) =>
-  tag.replace(/-/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
+const escapeSvgText = (value: string) =>
+  value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 
-const buildPosterCopy = (input: { tags: string[]; imageCount: number }) => {
-  const tagSet = new Set(input.tags);
+const buildLocalPosterSvg = (prompt: string) => {
+  const normalized = prompt.toLowerCase();
+  const headline = normalized.includes("spreadsheet")
+    ? "SPREADSHEETS DO NOT SCALE OPERATIONS"
+    : normalized.includes("stock")
+      ? "STOCK CONTROL NEEDS REAL VISIBILITY"
+      : "MANUAL CHAOS NEEDS OPERATIONAL CONTROL";
+  const subhead = normalized.includes("dispatch")
+    ? "OpsUI helps teams see orders, stock, and dispatch flow before small misses become daily drag."
+    : "OpsUI helps warehouse and ERP teams move from scattered workarounds to clearer control.";
+  const headlineLines = wrapText(headline, 19);
+  const subheadLines = wrapText(subhead, 42);
 
-  if (tagSet.has("productivity") || tagSet.has("software")) {
-    return {
-      headline: "Meetings, sharpened.",
-      subhead: "Premium workspace clarity for modern teams.",
-      detail: "Plan. Align. Follow through.",
-    };
-  }
+  return [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1536" viewBox="0 0 1024 1536">`,
+    `<defs>`,
+    `<radialGradient id="goldGlow" cx="72%" cy="20%" r="62%"><stop offset="0%" stop-color="#d6ad2d" stop-opacity="0.32"/><stop offset="100%" stop-color="#d6ad2d" stop-opacity="0"/></radialGradient>`,
+    `<radialGradient id="steelGlow" cx="18%" cy="82%" r="56%"><stop offset="0%" stop-color="#64748b" stop-opacity="0.24"/><stop offset="100%" stop-color="#64748b" stop-opacity="0"/></radialGradient>`,
+    `<pattern id="grid" width="48" height="48" patternUnits="userSpaceOnUse"><path d="M48 0H0V48" fill="none" stroke="#ffffff" stroke-opacity="0.055"/></pattern>`,
+    `</defs>`,
+    `<rect width="1024" height="1536" fill="#080807"/>`,
+    `<rect width="1024" height="1536" fill="url(#grid)" opacity="0.62"/>`,
+    `<rect width="1024" height="1536" fill="url(#goldGlow)"/>`,
+    `<rect width="1024" height="1536" fill="url(#steelGlow)"/>`,
+    `<rect x="76" y="76" width="872" height="1384" rx="42" fill="#11100d" fill-opacity="0.86" stroke="#d6ad2d" stroke-opacity="0.24"/>`,
+    `<text x="116" y="160" fill="#d6ad2d" font-family="Arial, sans-serif" font-size="27" font-weight="800" letter-spacing="7">OPSUI</text>`,
+    ...headlineLines.map(
+      (line, index) =>
+        `<text x="116" y="${340 + index * 82}" fill="#fff6d8" font-family="Arial Black, Arial, sans-serif" font-size="66" font-weight="900">${escapeSvgText(line)}</text>`,
+    ),
+    ...subheadLines.map(
+      (line, index) =>
+        `<text x="122" y="${720 + index * 46}" fill="#d6d0c2" font-family="Arial, sans-serif" font-size="30" font-weight="500">${escapeSvgText(line)}</text>`,
+    ),
+    `<rect x="116" y="970" width="792" height="280" rx="28" fill="#171717" stroke="#ffffff" stroke-opacity="0.1"/>`,
+    `<rect x="154" y="1026" width="280" height="36" rx="18" fill="#2f2f2a"/>`,
+    `<rect x="154" y="1100" width="716" height="26" rx="13" fill="#d6ad2d" opacity="0.74"/>`,
+    `<rect x="154" y="1164" width="574" height="22" rx="11" fill="#ffffff" opacity="0.14"/>`,
+    `<rect x="154" y="1218" width="650" height="22" rx="11" fill="#ffffff" opacity="0.1"/>`,
+    `<text x="116" y="1352" fill="#d6ad2d" font-family="Arial, sans-serif" font-size="25" font-weight="800">WAREHOUSE VISIBILITY. STOCK ACCURACY. CONTROL.</text>`,
+    `</svg>`,
+  ].join("");
+};
 
-  if (tagSet.has("handover") || tagSet.has("handovers")) {
-    return {
-      headline: "Cleaner handovers.",
-      subhead: "Every meeting detail ready before the next move.",
-      detail: "Prep that keeps momentum alive.",
-    };
-  }
-
-  if (input.imageCount > 0) {
-    return {
-      headline: "Built for the moment.",
-      subhead: "Visual context, meeting prep, and next steps in one place.",
-      detail: "OpsUI Meetings",
-    };
-  }
+const buildFallbackStrategy = (source: string): AiPostContent => {
+  const hashtagBank = extractHashtags(source);
+  const caption = [
+    "If your warehouse needs a spreadsheet to explain what the system cannot show, the process is already under pressure.",
+    "Growing teams need clear stock visibility, clean order flow, and dispatch control they can trust before the day gets away from them.",
+    "OpsUI helps operational businesses move from manual chaos to clearer control and scalable execution.",
+    "Where does your team still rely on manual workarounds?",
+    hashtagBank.slice(0, 7).map((tag) => `#${tag}`).join(" "),
+  ].join("\n\n");
 
   return {
-    headline: "Meetings made clear.",
-    subhead: "A calmer way to prep, run, and follow up.",
-    detail: "OpsUI Meetings",
+    caption,
+    alternatives: [
+      "Warehouse growth usually exposes the same issue: the team can move faster than the system can explain what is happening.",
+      "Stock accuracy is not just an inventory problem. It affects orders, dispatch, reporting, and every operational decision after that.",
+      "Spreadsheets can help a small team survive. They rarely give a growing operation the control it needs.",
+    ],
+    hashtagBank,
+    postingStyleRecommendation:
+      "Lead with one practical operational pain point, keep the post direct, and invite a conversation instead of pushing for a sale.",
+    ctaOptions: [
+      "Where is your team still relying on manual workarounds?",
+      "If this sounds familiar, it may be time to review the workflow.",
+      "Worth a conversation if stock, orders, or dispatch are getting harder to control.",
+    ],
+    generatedAt: new Date().toISOString(),
+    model: "local-fallback",
   };
 };
 
-const isCrmPipelinePrompt = (value: string) => {
-  const normalized = value.toLowerCase();
-
-  return (
-    normalized.includes("pipeline") &&
-    normalized.includes("crm")
-  );
-};
-
-const buildCrmPipelinePosterSvg = () =>
-  [
-    `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900" viewBox="0 0 1200 900">`,
-    `<defs>`,
-    `<radialGradient id="purpleGlow" cx="72%" cy="26%" r="64%"><stop offset="0%" stop-color="#7B5CFF" stop-opacity="0.34"/><stop offset="100%" stop-color="#7B5CFF" stop-opacity="0"/></radialGradient>`,
-    `<radialGradient id="redGlow" cx="78%" cy="68%" r="58%"><stop offset="0%" stop-color="#ff304d" stop-opacity="0.2"/><stop offset="100%" stop-color="#ff304d" stop-opacity="0"/></radialGradient>`,
-    `<pattern id="grid" width="42" height="42" patternUnits="userSpaceOnUse"><path d="M42 0H0V42" fill="none" stroke="#ffffff" stroke-opacity="0.045" stroke-width="1"/></pattern>`,
-    `<filter id="fakeGlow"><feGaussianBlur stdDeviation="4" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>`,
-    `</defs>`,
-    `<rect width="1200" height="900" fill="#0A0A0F"/>`,
-    `<rect width="1200" height="900" fill="url(#grid)" opacity="0.42"/>`,
-    `<rect width="1200" height="900" fill="url(#purpleGlow)"/>`,
-    `<rect width="1200" height="900" fill="url(#redGlow)"/>`,
-    `<text x="72" y="104" fill="#8b8da3" font-family="Arial, sans-serif" font-size="20" font-weight="700" letter-spacing="6">CRM REALITY CHECK</text>`,
-    `<text x="72" y="194" fill="#ffffff" font-family="Arial Black, Arial, sans-serif" font-size="70" font-weight="900">YOUR PIPELINE IS</text>`,
-    `<text x="72" y="280" fill="#7B5CFF" filter="url(#fakeGlow)" font-family="Arial Black, Arial, sans-serif" font-size="96" font-weight="900">PROBABLY FAKE.</text>`,
-    `<text x="76" y="336" fill="#d6d8e8" font-family="Arial, sans-serif" font-size="27">Your CRM shows what people say.</text>`,
-    `<text x="76" y="374" fill="#d6d8e8" font-family="Arial, sans-serif" font-size="27">Not what's actually happening.</text>`,
-    `<rect x="70" y="438" width="505" height="344" rx="24" fill="#11141a" stroke="#2ee77b" stroke-opacity="0.34"/>`,
-    `<rect x="625" y="438" width="505" height="344" rx="24" fill="#141014" stroke="#ff385a" stroke-opacity="0.42"/>`,
-    `<text x="104" y="488" fill="#2ee77b" font-family="Arial, sans-serif" font-size="22" font-weight="800" letter-spacing="3">CRM VIEW</text>`,
-    `<text x="659" y="488" fill="#ff536d" font-family="Arial, sans-serif" font-size="22" font-weight="800" letter-spacing="3">REALITY</text>`,
-    `<rect x="104" y="522" width="424" height="58" rx="14" fill="#151d19" stroke="#2ee77b" stroke-opacity="0.22"/>`,
-    `<circle cx="134" cy="551" r="12" fill="#2ee77b"/><path d="M128 551l5 5 9-11" stroke="#06110a" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`,
-    `<text x="166" y="545" fill="#ffffff" font-family="Arial, sans-serif" font-size="20" font-weight="700">Deal: Closing this week</text>`,
-    `<text x="166" y="568" fill="#8ea79a" font-family="Arial, sans-serif" font-size="15">High confidence</text>`,
-    `<rect x="104" y="604" width="424" height="58" rx="14" fill="#151d19" stroke="#2ee77b" stroke-opacity="0.18"/>`,
-    `<circle cx="134" cy="633" r="12" fill="#2ee77b"/><path d="M128 633l5 5 9-11" stroke="#06110a" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`,
-    `<text x="166" y="627" fill="#ffffff" font-family="Arial, sans-serif" font-size="20" font-weight="700">Lead: Hot</text>`,
-    `<text x="166" y="650" fill="#8ea79a" font-family="Arial, sans-serif" font-size="15">Priority account</text>`,
-    `<rect x="104" y="686" width="424" height="58" rx="14" fill="#151d19" stroke="#2ee77b" stroke-opacity="0.18"/>`,
-    `<circle cx="134" cy="715" r="12" fill="#2ee77b"/><path d="M128 715l5 5 9-11" stroke="#06110a" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>`,
-    `<text x="166" y="709" fill="#ffffff" font-family="Arial, sans-serif" font-size="20" font-weight="700">Follow-up: Done</text>`,
-    `<text x="166" y="732" fill="#8ea79a" font-family="Arial, sans-serif" font-size="15">Activity complete</text>`,
-    `<rect x="659" y="522" width="424" height="58" rx="14" fill="#201116" stroke="#ff385a" stroke-opacity="0.26"/>`,
-    `<text x="690" y="558" fill="#ff536d" font-family="Arial, sans-serif" font-size="26" font-weight="900">!</text>`,
-    `<text x="730" y="545" fill="#ffffff" font-family="Arial, sans-serif" font-size="20" font-weight="700">No reply in 5 days</text>`,
-    `<text x="730" y="568" fill="#b78e98" font-family="Arial, sans-serif" font-size="15">Deal risk rising</text>`,
-    `<rect x="659" y="604" width="424" height="58" rx="14" fill="#201116" stroke="#ff385a" stroke-opacity="0.22"/>`,
-    `<text x="690" y="640" fill="#ff536d" font-family="Arial, sans-serif" font-size="26" font-weight="900">!</text>`,
-    `<text x="730" y="627" fill="#ffffff" font-family="Arial, sans-serif" font-size="20" font-weight="700">Lead has gone cold</text>`,
-    `<text x="730" y="650" fill="#b78e98" font-family="Arial, sans-serif" font-size="15">No buying signal</text>`,
-    `<rect x="659" y="686" width="424" height="58" rx="14" fill="#201116" stroke="#ff385a" stroke-opacity="0.22"/>`,
-    `<text x="690" y="722" fill="#ff536d" font-family="Arial, sans-serif" font-size="26" font-weight="900">!</text>`,
-    `<text x="730" y="709" fill="#ffffff" font-family="Arial, sans-serif" font-size="20" font-weight="700">Follow-up opened, not read</text>`,
-    `<text x="730" y="732" fill="#b78e98" font-family="Arial, sans-serif" font-size="15">Activity logged, intent missing</text>`,
-    `<line x1="600" y1="438" x2="600" y2="782" stroke="#7B5CFF" stroke-opacity="0.24" stroke-width="2"/>`,
-    `<text x="72" y="840" fill="#7B5CFF" font-family="Arial, sans-serif" font-size="20" font-weight="800">OPSUI PIPELINE INTELLIGENCE</text>`,
-    `</svg>`,
-  ].join("");
-
-const buildOptimizedCaption = (input: {
-  prompt: string;
-  tags: string[];
-  imageCount: number;
-  variant: number;
-}) => {
-  const focusTags = input.tags.filter((tag) => tag !== "opsui").slice(0, 3);
-  const primaryFocus = focusTags[0] ? humanizeTag(focusTags[0]) : "Meeting prep";
-  const secondaryFocus = focusTags[1] ? humanizeTag(focusTags[1]) : "handover clarity";
-  const visualLines = [
-    input.imageCount > 0
-      ? `The visuals bring the story into focus: ${primaryFocus.toLowerCase()}, ${secondaryFocus.toLowerCase()}, and cleaner follow-through.`
-      : `This update is about ${primaryFocus.toLowerCase()}, ${secondaryFocus.toLowerCase()}, and making every next step easier to action.`,
-    input.imageCount > 0
-      ? `A sharp visual system helps turn scattered prep into a post-ready story.`
-      : `Small improvements before the call can make the whole handover feel calmer after it.`,
-    input.imageCount > 0
-      ? `The generated creative gives the post a stronger first impression while keeping the message focused.`
-      : `Use the prompt as direction, then let the caption speak like a finished brand update.`,
-  ];
-  const templates = [
-    [
-      `${primaryFocus} works best when every detail is clear before the conversation starts.`,
-      visualLines[input.variant % visualLines.length],
-      "OpsUI Meetings keeps the team aligned from prep to handover, so each demo feels sharper, faster, and easier to follow through.",
-      "What should we show next?",
-    ],
-    [
-      `Great meetings are not accidental. They start with clear context, strong ownership, and less last-minute guesswork.`,
-      `${primaryFocus} and ${secondaryFocus.toLowerCase()} stay front and center, so the team can move from conversation to action with confidence.`,
-      "That is the kind of workflow OpsUI is building for modern teams.",
-    ],
-    [
-      `A polished meeting workflow should feel quiet, fast, and ready before anyone joins the call.`,
-      visualLines[(input.variant + 1) % visualLines.length],
-      `OpsUI Meetings helps turn ${primaryFocus.toLowerCase()} into a repeatable rhythm, not another admin task.`,
-    ],
-    [
-      `Less chasing. More clarity. Better meetings.`,
-      `This post highlights ${primaryFocus.toLowerCase()} with a focus on ${secondaryFocus.toLowerCase()}, built for teams that want every follow-up to land cleanly.`,
-      "Prepared context makes the whole customer conversation feel more intentional.",
-    ],
-  ];
-
-  return templates[input.variant % templates.length].join("\n\n");
-};
+const createDrafts = (caption: string): Record<SocialPlatform, SocialPostDraft> =>
+  Object.fromEntries(
+    platformIds.map((platform) => [
+      platform,
+      {
+        platform,
+        caption,
+        customized: false,
+        tweakInstruction: "",
+        isTweaking: false,
+      },
+    ]),
+  ) as Record<SocialPlatform, SocialPostDraft>;
 
 export const PostPanel = ({ authToken }: Props) => {
-  const [prompt, setPrompt] = useState(
-    "Create a polished social post about the OpsUI team preparing better meetings, cleaner handovers, and stronger demo follow-up.",
-  );
-  const [imagePrompt, setImagePrompt] = useState(
-    "Create a premium dark SaaS poster for OpsUI Meetings with clean typography, subtle UI details, and warm gold lighting.",
-  );
-  const [caption, setCaption] = useState(
-    "Behind the scenes with the OpsUI team: focused calls, cleaner handovers, and better meeting prep.",
-  );
-  const [images, setImages] = useState<PostImage[]>([]);
-  const imagesRef = useRef<PostImage[]>([]);
-  const captionInputRef = useRef<HTMLTextAreaElement | null>(null);
-  const captionVariantRef = useRef(0);
-  const [tagInput, setTagInput] = useState("");
-  const [tags, setTags] = useState<string[]>(defaultTags);
-  const [saveNotice, setSaveNotice] = useState<string | null>(null);
+  const [captionPrompt, setCaptionPrompt] = useState(defaultCaptionPrompt);
+  const [imagePrompt, setImagePrompt] = useState(defaultImagePrompt);
+  const [masterCaption, setMasterCaption] = useState("");
+  const [captionStrategy, setCaptionStrategy] = useState<AiPostContent | null>(null);
+  const [postImage, setPostImage] = useState<PostImage | null>(null);
+  const [selectedPlatforms, setSelectedPlatforms] = useState<SocialPlatform[]>([]);
+  const [drafts, setDrafts] = useState(createDrafts(""));
   const [isGeneratingCaption, setIsGeneratingCaption] = useState(false);
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
-
-  const normalizedCaption = caption.trim();
-  const postCaption = normalizedCaption || "Write a caption to preview it here.";
-  const postTags = tags.map((tag) => `#${tag}`).join(" ");
-  const promptCount = prompt.length;
-  const imagePromptCount = imagePrompt.length;
-  const captionCount = caption.length;
-  const hasImages = images.length > 0;
-  const readinessChecks = [
-    {
-      label: "Caption",
-      ready: normalizedCaption.length >= 80,
-      copy: normalizedCaption.length >= 80 ? "Strong length" : "Add more detail",
-    },
-    {
-      label: "Images",
-      ready: hasImages,
-      copy: hasImages ? `${images.length} ready` : "Add or generate one",
-    },
-    {
-      label: "Tags",
-      ready: tags.length >= 4,
-      copy: tags.length >= 4 ? `${tags.length} tags` : "Add more tags",
-    },
-    {
-      label: "Prompt",
-      ready: prompt.trim().length >= 30 || imagePrompt.trim().length >= 30,
-      copy: "Creative direction",
-    },
-  ];
-  const readinessScore = Math.round(
-    (readinessChecks.filter((check) => check.ready).length / readinessChecks.length) * 100,
-  );
+  const [saveNotice, setSaveNotice] = useState<string | null>(null);
+  const masterCaptionInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const postImageRef = useRef<PostImage | null>(null);
 
   const previewTime = useMemo(
     () =>
@@ -291,14 +266,20 @@ export const PostPanel = ({ authToken }: Props) => {
       }).format(new Date()),
     [],
   );
+  const selectedAll = selectedPlatforms.length === platformIds.length;
+  const activeHashtags = captionStrategy?.hashtagBank.length
+    ? captionStrategy.hashtagBank
+    : fallbackHashtags;
+  const hasImage = Boolean(postImage);
+  const readyToPreview = masterCaption.trim().length > 0 || hasImage;
 
   useEffect(() => {
-    imagesRef.current = images;
-  }, [images]);
+    postImageRef.current = postImage;
+  }, [postImage]);
 
   useEffect(() => {
     return () => {
-      imagesRef.current.forEach((image) => URL.revokeObjectURL(image.url));
+      revokePostImage(postImageRef.current);
     };
   }, []);
 
@@ -307,240 +288,230 @@ export const PostPanel = ({ authToken }: Props) => {
       return undefined;
     }
 
-    const timeout = window.setTimeout(() => {
-      setSaveNotice(null);
-    }, 3600);
+    const timeout = window.setTimeout(() => setSaveNotice(null), 3600);
 
-    return () => {
-      window.clearTimeout(timeout);
-    };
+    return () => window.clearTimeout(timeout);
   }, [saveNotice]);
 
   useEffect(() => {
-    const captionInput = captionInputRef.current;
+    const input = masterCaptionInputRef.current;
 
-    if (!captionInput) {
+    if (!input) {
       return;
     }
 
-    captionInput.style.height = "auto";
-    captionInput.style.height = `${captionInput.scrollHeight}px`;
-  }, [caption]);
+    input.style.height = "auto";
+    input.style.height = `${input.scrollHeight}px`;
+  }, [masterCaption]);
 
-  const addTag = (value: string) => {
-    const nextTag = value.trim().replace(/^#/, "").toLowerCase();
-
-    if (!nextTag || tags.includes(nextTag)) {
-      return;
-    }
-
-    setTags((current) => [...current, nextTag]);
-    setTagInput("");
+  const replaceImage = (image: PostImage | null) => {
+    setPostImage((current) => {
+      revokePostImage(current);
+      return image;
+    });
   };
 
-  const removeTag = (tag: string) => {
-    setTags((current) => current.filter((item) => item !== tag));
-  };
+  const syncDraftCaptions = (caption: string) => {
+    setDrafts((current) =>
+      Object.fromEntries(
+        platformIds.map((platform) => {
+          const draft = current[platform];
 
-  const mergeTags = (nextTags: string[]) => {
-    setTags((current) =>
-      [...current, ...nextTags].filter(
-        (tag, index, allTags) => tag && allTags.indexOf(tag) === index,
-      ),
+          return [
+            platform,
+            draft.customized
+              ? draft
+              : {
+                  ...draft,
+                  caption,
+                },
+          ];
+        }),
+      ) as Record<SocialPlatform, SocialPostDraft>,
     );
   };
 
+  const applyCaptionStrategy = (strategy: AiPostContent, notice: string) => {
+    setCaptionStrategy(strategy);
+    setMasterCaption(strategy.caption);
+    setDrafts(createDrafts(strategy.caption));
+    setSaveNotice(notice);
+  };
+
+  const handleMasterCaptionChange = (caption: string) => {
+    setMasterCaption(caption);
+    syncDraftCaptions(caption);
+  };
+
   const handleGenerateCaption = async () => {
-    const source = prompt.trim() || caption.trim();
-    const nextTags = extractTags(source);
+    const source = captionPrompt.trim() || masterCaption.trim();
+
+    if (!source) {
+      setSaveNotice("Add a caption prompt first.");
+      return;
+    }
 
     setIsGeneratingCaption(true);
 
     try {
       const generated = await generatePostContent(authToken, {
         prompt: source,
-        currentCaption: caption,
-        imageNames: images.map((image) => image.name),
-        tags,
+        platform: "general",
+        currentCaption: masterCaption,
+        imageNames: postImage ? [postImage.name] : [],
+        tags: activeHashtags,
       });
 
-      setCaption(generated.caption);
-      mergeTags(generated.tags);
-      setSaveNotice("Caption generated with ChatGPT.");
-    } catch {
-      captionVariantRef.current += 1;
-      const variant = captionVariantRef.current + Math.floor(Math.random() * 4);
-      const generatedCaption = buildOptimizedCaption({
-        prompt: source,
-        tags: nextTags,
-        imageCount: images.length,
-        variant,
-      });
-
-      setCaption(generatedCaption);
-      mergeTags(nextTags);
-      setSaveNotice("ChatGPT unavailable. Used local caption fallback.");
+      applyCaptionStrategy(generated, "Caption strategy generated.");
+    } catch (error) {
+      applyCaptionStrategy(
+        buildFallbackStrategy(source),
+        error instanceof ApiError
+          ? `AI caption failed: ${error.message}. Used local fallback.`
+          : "AI caption unavailable. Used local fallback.",
+      );
     } finally {
       setIsGeneratingCaption(false);
     }
   };
 
-  const buildLocalGeneratedImage = (source: string, nextTags: string[]): PostImage => {
-    const imageName = `${slugify(source)}-${images.length + 1}.svg`;
-    const svg = isCrmPipelinePrompt(source)
-      ? buildCrmPipelinePosterSvg()
-      : (() => {
-    const posterCopy = buildPosterCopy({
-      tags: nextTags,
-      imageCount: images.length,
-    });
-    const titleLines = wrapText(posterCopy.headline, 22);
-    const subheadLines = wrapText(posterCopy.subhead, 42);
-    const base = "#080807";
-    const panel = "#17130d";
-    const accent = "#d6ad2d";
-    const accentSoft = "#f3d977";
-    const text = "#fff6d8";
-    return [
-      `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="900" viewBox="0 0 1200 900">`,
-      `<rect width="1200" height="900" fill="${base}"/>`,
-      `<rect x="0" y="0" width="1200" height="900" fill="url(#grid)" opacity="0.18"/>`,
-      `<defs>`,
-      `<radialGradient id="glowA" cx="72%" cy="18%" r="58%"><stop offset="0%" stop-color="${accent}" stop-opacity="0.28"/><stop offset="100%" stop-color="${accent}" stop-opacity="0"/></radialGradient>`,
-      `<radialGradient id="glowB" cx="20%" cy="86%" r="56%"><stop offset="0%" stop-color="${accentSoft}" stop-opacity="0.12"/><stop offset="100%" stop-color="${accentSoft}" stop-opacity="0"/></radialGradient>`,
-      `<pattern id="grid" width="54" height="54" patternUnits="userSpaceOnUse"><path d="M 54 0 L 0 0 0 54" fill="none" stroke="#ffffff" stroke-opacity="0.055" stroke-width="1"/></pattern>`,
-      `</defs>`,
-      `<rect width="1200" height="900" fill="url(#glowA)"/>`,
-      `<rect width="1200" height="900" fill="url(#glowB)"/>`,
-      `<rect x="72" y="72" width="1056" height="756" rx="38" fill="${panel}" fill-opacity="0.72" stroke="${accent}" stroke-opacity="0.28"/>`,
-      `<rect x="760" y="170" width="260" height="410" rx="28" fill="#0d0d0b" stroke="${accent}" stroke-opacity="0.16"/>`,
-      `<rect x="796" y="218" width="188" height="18" rx="9" fill="${accent}" opacity="0.72"/>`,
-      `<rect x="796" y="276" width="154" height="14" rx="7" fill="#ffffff" opacity="0.14"/>`,
-      `<rect x="796" y="318" width="182" height="14" rx="7" fill="#ffffff" opacity="0.1"/>`,
-      `<rect x="796" y="390" width="92" height="92" rx="18" fill="${accent}" opacity="0.2"/>`,
-      `<rect x="906" y="390" width="92" height="92" rx="18" fill="${accent}" opacity="0.12"/>`,
-      `<text x="112" y="146" fill="${accent}" font-family="Arial, sans-serif" font-size="26" font-weight="700" letter-spacing="6">OPSUI</text>`,
-      ...titleLines.map(
-        (line, index) =>
-          `<text x="112" y="${322 + index * 74}" fill="${text}" font-family="Arial, sans-serif" font-size="70" font-weight="800">${escapeSvgText(line)}</text>`,
-      ),
-      ...subheadLines.map(
-        (line, index) =>
-          `<text x="116" y="${520 + index * 42}" fill="#d6d0c2" font-family="Arial, sans-serif" font-size="30" font-weight="500">${escapeSvgText(line)}</text>`,
-      ),
-      `<text x="116" y="714" fill="${accent}" font-family="Arial, sans-serif" font-size="24" font-weight="700">${escapeSvgText(posterCopy.detail)}</text>`,
-      `<text x="116" y="768" fill="#d6d0c2" opacity="0.72" font-family="Arial, sans-serif" font-size="22">${escapeSvgText(nextTags.slice(0, 5).map((tag) => `#${tag}`).join(" "))}</text>`,
-      `</svg>`,
-    ].join("");
-      })();
-    return {
-      id: `generated-${Date.now()}-${crypto.randomUUID()}`,
-      name: imageName,
-      url: URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" })),
-      generated: true,
-    };
-  };
-
   const handleGenerateImage = async () => {
-    const source =
-      imagePrompt.trim() || prompt.trim() || caption.trim() || "OpsUI Meetings content";
-    const nextTags = extractTags(source);
+    const source = imagePrompt.trim() || captionPrompt.trim() || masterCaption.trim();
+
+    if (!source) {
+      setSaveNotice("Add an image prompt first.");
+      return;
+    }
 
     setIsGeneratingImage(true);
 
     try {
       const generated = await generatePostImage(authToken, {
-          prompt: source,
-        caption,
-        tags,
+        prompt: source,
+        caption: masterCaption,
+        tags: activeHashtags,
       });
-      const image = {
+
+      replaceImage({
         id: `generated-${Date.now()}-${crypto.randomUUID()}`,
         name: generated.fileName,
         url: generated.imageDataUrl,
         generated: true,
-      };
-
-      setImages((current) => [...current, image].slice(0, 6));
-      mergeTags(generated.tags);
-      setSaveNotice("Image generated with ChatGPT.");
+        objectUrl: false,
+      });
+      setSaveNotice(`Image generated with ${generated.model}.`);
     } catch (error) {
-      const image = buildLocalGeneratedImage(source, nextTags);
-      const message =
-        error instanceof ApiError
-          ? `ChatGPT image failed: ${error.message}. Used local fallback.`
-          : "ChatGPT unavailable. Used local image fallback.";
+      const svg = buildLocalPosterSvg(source);
 
-      setImages((current) => [...current, image].slice(0, 6));
-      mergeTags(nextTags);
-      setSaveNotice(message);
+      replaceImage({
+        id: `fallback-${Date.now()}-${crypto.randomUUID()}`,
+        name: "opsui-social-fallback.svg",
+        url: URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" })),
+        generated: true,
+        objectUrl: true,
+      });
+      setSaveNotice(
+        error instanceof ApiError
+          ? `AI image failed: ${error.message}. Used local fallback.`
+          : "AI image unavailable. Used local fallback.",
+      );
     } finally {
       setIsGeneratingImage(false);
     }
   };
 
-  const saveGeneratedImage = async (image: PostImage) => {
-    try {
-      const loadedImage = new Image();
-      const jpegName = image.name.replace(/\.[^.]+$/, ".jpg");
-      const jpegUrl = await new Promise<string>((resolve, reject) => {
-        loadedImage.onload = () => {
-          const canvas = document.createElement("canvas");
-          const context = canvas.getContext("2d");
-
-          if (!context) {
-            reject(new Error("Unable to create image export."));
-            return;
-          }
-
-          canvas.width = loadedImage.naturalWidth || 1200;
-          canvas.height = loadedImage.naturalHeight || 900;
-          context.fillStyle = "#080807";
-          context.fillRect(0, 0, canvas.width, canvas.height);
-          context.drawImage(loadedImage, 0, 0, canvas.width, canvas.height);
-          resolve(canvas.toDataURL("image/jpeg", 0.94));
-        };
-        loadedImage.onerror = () => reject(new Error("Unable to load generated image."));
-        loadedImage.src = image.url;
-      });
-      const anchor = document.createElement("a");
-
-      anchor.href = jpegUrl;
-      anchor.download = jpegName;
-      anchor.click();
-      setSaveNotice("Image saved to Downloads!");
-    } catch {
-      setSaveNotice("Image could not be saved.");
-    }
-  };
-
   const handleImageUpload = (files: FileList | null) => {
-    if (!files?.length) {
+    const file = Array.from(files ?? []).find((item) => item.type.startsWith("image/"));
+
+    if (!file) {
+      setSaveNotice("Choose a PNG, JPG, or WEBP image.");
       return;
     }
 
-    const nextImages = Array.from(files)
-      .filter((file) => file.type.startsWith("image/"))
-      .map((file) => ({
-        id: buildImageId(file),
-        name: file.name,
-        url: URL.createObjectURL(file),
-        generated: false,
-      }));
-
-    setImages((current) => [...current, ...nextImages].slice(0, 6));
+    replaceImage({
+      id: buildImageId(file),
+      name: file.name,
+      url: URL.createObjectURL(file),
+      generated: false,
+      objectUrl: true,
+    });
+    setSaveNotice("Image uploaded.");
   };
 
-  const removeImage = (imageId: string) => {
-    setImages((current) => {
-      const image = current.find((item) => item.id === imageId);
+  const handleDownloadImage = () => {
+    if (!postImage) {
+      return;
+    }
 
-      if (image) {
-        URL.revokeObjectURL(image.url);
-      }
+    const anchor = document.createElement("a");
 
-      return current.filter((item) => item.id !== imageId);
-    });
+    anchor.href = postImage.url;
+    anchor.download = postImage.name;
+    anchor.click();
+    setSaveNotice("Image download started.");
+  };
+
+  const togglePlatform = (platform: SocialPlatform) => {
+    setSelectedPlatforms((current) =>
+      current.includes(platform)
+        ? current.filter((item) => item !== platform)
+        : [...current, platform],
+    );
+  };
+
+  const toggleSelectAllPlatforms = () => {
+    setSelectedPlatforms(selectedAll ? [] : [...platformIds]);
+  };
+
+  const updateDraft = (platform: SocialPlatform, patch: Partial<SocialPostDraft>) => {
+    setDrafts((current) => ({
+      ...current,
+      [platform]: {
+        ...current[platform],
+        ...patch,
+      },
+    }));
+  };
+
+  const handleTweakPlatformCaption = async (platform: SocialPlatform) => {
+    const draft = drafts[platform];
+    const instruction = draft.tweakInstruction.trim();
+
+    if (!instruction) {
+      setSaveNotice(`Add a ${platformById[platform].label} tweak first.`);
+      return;
+    }
+
+    updateDraft(platform, { isTweaking: true });
+
+    try {
+      const generated = await generatePostContent(authToken, {
+        prompt: captionPrompt,
+        platform,
+        currentCaption: draft.caption || masterCaption,
+        tweakInstruction: instruction,
+        imageNames: postImage ? [postImage.name] : [],
+        tags: activeHashtags,
+      });
+
+      updateDraft(platform, {
+        caption: generated.caption,
+        customized: true,
+        isTweaking: false,
+      });
+      setSaveNotice(`${platformById[platform].label} caption tweaked.`);
+    } catch (error) {
+      updateDraft(platform, { isTweaking: false });
+      setSaveNotice(
+        error instanceof ApiError
+          ? `Caption tweak failed: ${error.message}`
+          : "Caption tweak unavailable.",
+      );
+    }
+  };
+
+  const handlePush = () => {
+    setSaveNotice("Platform accounts are not connected yet. Push is staged only.");
   };
 
   return (
@@ -548,32 +519,32 @@ export const PostPanel = ({ authToken }: Props) => {
       <div className="post-card">
         <div className="post-card__hero">
           <div>
-            <div className="sidebar-section__label">Create Content</div>
-            <h1 className="post-title">Build a post before it goes live</h1>
+            <div className="sidebar-section__label">Social publisher</div>
+            <h1 className="post-title">Build OpsUI social posts</h1>
             <p className="post-subtitle">
-              Build the prompt, images, and tags on the left. Edit the live caption on
-              the right to shape the final post before it is shared.
+              Generate caption strategy and portrait creative, then stage the post for
+              Facebook, LinkedIn, X/Twitter, and Instagram.
             </p>
           </div>
-          <div className="post-hero__pill">Live post preview</div>
+          <div className="post-hero__pill">Accounts not connected</div>
         </div>
 
         <div className="post-layout">
           <div className="post-compose">
             <section className="post-section">
               <div className="post-section__header">
-                <span className="eyebrow">Prompt</span>
-                <h2>Guide the caption</h2>
+                <span className="eyebrow">Caption prompt</span>
+                <h2>Write the post direction</h2>
               </div>
               <label>
-                Prompt
+                Caption Prompt
                 <textarea
                   className="post-caption-input"
-                  maxLength={4000}
-                  onChange={(event) => setPrompt(event.target.value)}
-                  placeholder="Describe what the caption should say, tone, audience, and key points..."
+                  maxLength={8000}
+                  onChange={(event) => setCaptionPrompt(event.target.value)}
+                  placeholder="Describe the operational pain point, story, offer, or post idea..."
                   rows={8}
-                  value={prompt}
+                  value={captionPrompt}
                 />
               </label>
               <div className="post-section-actions">
@@ -583,130 +554,125 @@ export const PostPanel = ({ authToken }: Props) => {
                   onClick={() => void handleGenerateCaption()}
                   type="button"
                 >
-                  {isGeneratingCaption ? "Generating..." : "Generate caption and tags"}
+                  {isGeneratingCaption ? "Generating..." : "Generate caption"}
                 </button>
-                <span className="post-field-meta">{promptCount}/4000 prompt characters</span>
+                <span className="post-field-meta">{captionPrompt.length}/8000</span>
               </div>
             </section>
 
             <section className="post-section">
               <div className="post-section__header">
-                <span className="eyebrow">Images</span>
-                <h2>Add visuals</h2>
+                <span className="eyebrow">Image prompt</span>
+                <h2>Create or upload the visual</h2>
               </div>
-
               <label>
                 Image Prompt
                 <textarea
                   className="post-image-prompt-input"
                   maxLength={8000}
                   onChange={(event) => setImagePrompt(event.target.value)}
-                  placeholder="Describe the image, poster style, colors, layout, typography, and any visual details..."
-                  rows={6}
+                  placeholder="Describe the image style, message, layout, and operational context..."
+                  rows={7}
                   value={imagePrompt}
                 />
               </label>
-              <div className="post-field-meta">{imagePromptCount}/8000 image prompt characters</div>
+              <div className="post-section-actions">
+                <button
+                  className="post-generate-btn"
+                  disabled={isGeneratingImage}
+                  onClick={() => void handleGenerateImage()}
+                  type="button"
+                >
+                  {isGeneratingImage ? "Generating..." : "Generate image"}
+                </button>
+                <span className="post-field-meta">{imagePrompt.length}/8000</span>
+              </div>
 
               <label className="post-upload">
                 <span className="post-upload__icon">+</span>
                 <span>
-                  <strong>Upload images</strong>
-                  <small>PNG, JPG, or WEBP. Up to 6 images.</small>
+                  <strong>Upload or replace image</strong>
+                  <small>PNG, JPG, WEBP, or generated image. One active image.</small>
                 </span>
                 <input
                   accept="image/*"
-                  multiple
-                  onChange={(event) => handleImageUpload(event.target.files)}
+                  onChange={(event) => {
+                    handleImageUpload(event.target.files);
+                    event.currentTarget.value = "";
+                  }}
                   type="file"
                 />
               </label>
 
-              <button
-                className="post-generate-btn post-generate-btn--wide"
-                disabled={isGeneratingImage}
-                onClick={() => void handleGenerateImage()}
-                type="button"
-              >
-                {isGeneratingImage ? "Generating image..." : "Generate image from prompt"}
-              </button>
-
-              {hasImages ? (
-                <div className="post-image-list">
-                  {images.map((image) => (
-                    <div className="post-image-item" key={image.id}>
-                      <img alt="" src={image.url} />
-                      <span>{image.name}</span>
-                      <div className="post-image-item__actions">
-                        {image.generated ? (
-                          <button
-                            className="post-image-item__save"
-                            onClick={() => void saveGeneratedImage(image)}
-                            type="button"
-                          >
-                            Save
-                          </button>
-                        ) : null}
-                        <button
-                          className="post-image-item__remove"
-                          onClick={() => removeImage(image.id)}
-                          type="button"
-                        >
-                          Remove
-                        </button>
-                      </div>
-                    </div>
-                  ))}
+              {postImage ? (
+                <div className="post-image-item">
+                  <img alt="" src={postImage.url} />
+                  <span>{postImage.name}</span>
+                  <div className="post-image-item__actions">
+                    {postImage.generated ? (
+                      <button
+                        className="post-image-item__save"
+                        onClick={handleDownloadImage}
+                        type="button"
+                      >
+                        Save
+                      </button>
+                    ) : null}
+                    <button
+                      className="post-image-item__remove"
+                      onClick={() => replaceImage(null)}
+                      type="button"
+                    >
+                      Remove
+                    </button>
+                  </div>
                 </div>
               ) : null}
             </section>
 
             <section className="post-section">
               <div className="post-section__header">
-                <span className="eyebrow">Tags</span>
-                <h2>Group the content</h2>
+                <span className="eyebrow">Channels</span>
+                <h2>Select platforms</h2>
               </div>
-              <label>
-                Tags
-                <input
-                  onChange={(event) => setTagInput(event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" || event.key === ",") {
-                      event.preventDefault();
-                      addTag(tagInput);
-                    }
-                  }}
-                  placeholder="Type a tag and press Enter"
-                  value={tagInput}
-                />
-              </label>
-              <div className="post-tag-row">
-                {tags.map((tag) => (
+              <div className="post-platform-selector">
+                <button
+                  className={`post-platform-btn ${selectedAll ? "post-platform-btn--active" : ""}`}
+                  onClick={toggleSelectAllPlatforms}
+                  type="button"
+                >
+                  Select all
+                </button>
+                {socialPlatforms.map((platform) => (
                   <button
-                    className="post-tag-chip"
-                    key={tag}
-                    onClick={() => removeTag(tag)}
+                    aria-pressed={selectedPlatforms.includes(platform.id)}
+                    className={`post-platform-btn ${selectedPlatforms.includes(platform.id) ? "post-platform-btn--active" : ""}`}
+                    key={platform.id}
+                    onClick={() => togglePlatform(platform.id)}
                     type="button"
                   >
-                    #{tag}
-                    <span>x</span>
+                    <span>{platform.shortLabel}</span>
+                    {platform.label}
                   </button>
                 ))}
+              </div>
+              <div className="post-field-meta">
+                {selectedPlatforms.length} of {platformIds.length} selected
               </div>
             </section>
           </div>
 
-          <aside className="post-preview-panel" aria-label="Live post preview">
+          <aside className="post-preview-panel" aria-label="Master post preview">
             <div className="post-preview-panel__header">
-              <span className="eyebrow">Live</span>
-              <h2>Post preview</h2>
+              <span className="eyebrow">Master preview</span>
+              <h2>Review before platform edits</h2>
             </div>
 
             <article className="post-preview">
               <div className="post-preview__top">
                 <img alt="OpsUI" className="post-preview__avatar" src={opsLogo} />
                 <div>
-                  <strong>OpsUI Meetings</strong>
+                  <strong>OpsUI</strong>
                   <span>{previewTime}</span>
                 </div>
               </div>
@@ -714,70 +680,183 @@ export const PostPanel = ({ authToken }: Props) => {
               <label className="post-preview__caption-editor">
                 <span>Caption</span>
                 <textarea
-                  ref={captionInputRef}
+                  ref={masterCaptionInputRef}
                   className="post-preview__caption-input"
-                  maxLength={2200}
-                  onChange={(event) => setCaption(event.target.value)}
-                  placeholder="Edit the final caption here..."
-                  rows={4}
-                  value={caption}
+                  maxLength={maxCaptionLength}
+                  onChange={(event) => handleMasterCaptionChange(event.target.value)}
+                  placeholder="Generated caption appears here. You can edit it before platform previews."
+                  rows={5}
+                  value={masterCaption}
                 />
-                <small>{captionCount}/2200 characters</small>
+                <small>{masterCaption.length}/{maxCaptionLength}</small>
               </label>
 
-              {!normalizedCaption ? (
-                <p className="post-preview__caption-placeholder">{postCaption}</p>
-              ) : null}
-
-              {hasImages ? (
-                <div
-                  className={`post-preview__images post-preview__images--${Math.min(images.length, 4)}`}
-                >
-                  {images.slice(0, 4).map((image, index) => (
-                    <div className="post-preview__image" key={image.id}>
-                      <img alt={`Post preview ${index + 1}`} src={image.url} />
-                      {index === 3 && images.length > 4 ? (
-                        <span className="post-preview__more">+{images.length - 4}</span>
-                      ) : null}
-                    </div>
-                  ))}
+              {postImage ? (
+                <div className="post-preview__image post-preview__image--portrait">
+                  <img alt="Master post preview" src={postImage.url} />
                 </div>
               ) : (
                 <div className="post-preview__empty-image">Image preview</div>
               )}
 
-              {postTags ? <div className="post-preview__tags">{postTags}</div> : null}
+              <div className="post-preview__tags">
+                {activeHashtags.map((tag) => `#${tag}`).join(" ")}
+              </div>
 
               <div className="post-preview__metrics">
-                <span>Ready to post</span>
-                <span>{images.length} image{images.length === 1 ? "" : "s"}</span>
-                <span>{tags.length} tag{tags.length === 1 ? "" : "s"}</span>
+                <span>{readyToPreview ? "Ready to preview" : "Needs content"}</span>
+                <span>{hasImage ? "Image ready" : "No image"}</span>
+                <span>{captionStrategy ? captionStrategy.model : "No caption model"}</span>
               </div>
             </article>
 
-            <section className="post-readiness">
-              <div className="post-readiness__top">
-                <span className="eyebrow">Readiness</span>
-                <strong>{readinessScore}%</strong>
-              </div>
-              <div className="post-readiness__bar">
-                <span style={{ width: `${readinessScore}%` }} />
-              </div>
-              <div className="post-readiness__checks">
-                {readinessChecks.map((check) => (
-                  <div
-                    className={`post-readiness__check ${check.ready ? "post-readiness__check--ready" : ""}`}
-                    key={check.label}
-                  >
-                    <span>{check.label}</span>
-                    <small>{check.copy}</small>
+            {captionStrategy ? (
+              <details className="post-strategy" open>
+                <summary>Caption strategy</summary>
+                <div className="post-strategy__body">
+                  <div>
+                    <span className="eyebrow">Alternatives</span>
+                    <div className="post-alt-list">
+                      {captionStrategy.alternatives.map((alternative, index) => (
+                        <button
+                          key={`${alternative}-${index}`}
+                          onClick={() => handleMasterCaptionChange(alternative)}
+                          type="button"
+                        >
+                          {alternative}
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                ))}
-              </div>
-            </section>
+                  <div>
+                    <span className="eyebrow">Hashtag bank</span>
+                    <div className="post-tag-row">
+                      {captionStrategy.hashtagBank.map((tag) => (
+                        <span className="post-tag-chip" key={tag}>#{tag}</span>
+                      ))}
+                    </div>
+                  </div>
+                  <div>
+                    <span className="eyebrow">Posting style</span>
+                    <p>{captionStrategy.postingStyleRecommendation}</p>
+                  </div>
+                  <div>
+                    <span className="eyebrow">CTA options</span>
+                    <div className="post-cta-list">
+                      {captionStrategy.ctaOptions.map((cta) => (
+                        <button
+                          key={cta}
+                          onClick={() => handleMasterCaptionChange(`${masterCaption.trim()}\n\n${cta}`.trim())}
+                          type="button"
+                        >
+                          {cta}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </details>
+            ) : null}
           </aside>
         </div>
+
+        <section className="post-platform-queue">
+          <div className="post-platform-queue__header">
+            <div>
+              <span className="eyebrow">Platform previews</span>
+              <h2>Ready queue</h2>
+            </div>
+            <button
+              className="post-push-btn"
+              disabled={!selectedPlatforms.length}
+              onClick={handlePush}
+              type="button"
+            >
+              Push
+            </button>
+          </div>
+
+          {selectedPlatforms.length ? (
+            <div className="post-platform-grid">
+              {selectedPlatforms.map((platform) => {
+                const meta = platformById[platform];
+                const draft = drafts[platform];
+                const overLimit = draft.caption.length > meta.captionLimit;
+
+                return (
+                  <article className="post-platform-card" key={platform}>
+                    <div className="post-platform-card__top">
+                      <div className="post-platform-card__mark">{meta.shortLabel}</div>
+                      <div>
+                        <strong>{meta.label}</strong>
+                        <span>{meta.previewMeta}</span>
+                      </div>
+                    </div>
+
+                    {postImage ? (
+                      <div className="post-platform-card__image">
+                        <img alt={`${meta.label} preview`} src={postImage.url} />
+                      </div>
+                    ) : (
+                      <div className="post-preview__empty-image">No image selected</div>
+                    )}
+
+                    <label className="post-preview__caption-editor">
+                      <span>Final caption</span>
+                      <textarea
+                        className="post-platform-caption"
+                        maxLength={maxCaptionLength}
+                        onChange={(event) =>
+                          updateDraft(platform, {
+                            caption: event.target.value,
+                            customized: true,
+                          })
+                        }
+                        rows={8}
+                        value={draft.caption}
+                      />
+                      <small className={overLimit ? "post-platform-limit--warn" : undefined}>
+                        {draft.caption.length}/{meta.captionLimit} recommended
+                      </small>
+                    </label>
+
+                    <label className="post-platform-tweak">
+                      <span>Tweak prompt for {meta.label}</span>
+                      <textarea
+                        maxLength={2000}
+                        onChange={(event) =>
+                          updateDraft(platform, {
+                            tweakInstruction: event.target.value,
+                          })
+                        }
+                        placeholder={`Example: Make this more ${meta.label}-native without changing the core point.`}
+                        rows={3}
+                        value={draft.tweakInstruction}
+                      />
+                    </label>
+
+                    <div className="post-platform-card__actions">
+                      <span>{meta.styleHint}</span>
+                      <button
+                        disabled={draft.isTweaking}
+                        onClick={() => void handleTweakPlatformCaption(platform)}
+                        type="button"
+                      >
+                        {draft.isTweaking ? "Tweaking..." : "Tweak caption"}
+                      </button>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="post-platform-empty">
+              Select one or more platforms to see final previews.
+            </div>
+          )}
+        </section>
       </div>
+
       {saveNotice ? (
         <div className="post-save-toast" role="status" aria-live="polite">
           {saveNotice}

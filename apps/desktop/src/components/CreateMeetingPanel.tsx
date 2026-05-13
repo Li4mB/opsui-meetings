@@ -104,15 +104,11 @@ export const CreateMeetingPanel = ({ isSubmitting, onSubmit }: Props) => {
   const [form, setForm] = useState<CreateMeetingRequestInput>(initialForm);
   const [error, setError] = useState<string | null>(null);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
-  const [canUsePortal, setCanUsePortal] = useState(false);
   const preferredDateRef = useRef<HTMLInputElement | null>(null);
   const preferredTimeRef = useRef<HTMLInputElement | null>(null);
+  const portalRoot = typeof document === "undefined" ? null : document.body;
   const allModulesSelected =
     form.modules.length === meetingRequestModuleOptions.length;
-
-  useEffect(() => {
-    setCanUsePortal(true);
-  }, []);
 
   useEffect(() => {
     if (!successMessage) {
@@ -508,7 +504,7 @@ export const CreateMeetingPanel = ({ isSubmitting, onSubmit }: Props) => {
         </div>
       </div>
 
-      {successMessage && canUsePortal ? createPortal(
+      {successMessage && portalRoot ? createPortal(
         <div className="meeting-created-toast" role="status" aria-live="polite">
           <span className="meeting-created-toast__icon">
             <svg aria-hidden="true" fill="none" viewBox="0 0 16 16">
@@ -526,7 +522,7 @@ export const CreateMeetingPanel = ({ isSubmitting, onSubmit }: Props) => {
             <p>{successMessage}</p>
           </span>
         </div>,
-        document.body,
+        portalRoot,
       ) : null}
     </section>
   );

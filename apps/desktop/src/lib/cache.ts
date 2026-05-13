@@ -169,7 +169,9 @@ export const clearCache = async (key: string) => {
 
   try {
     await db.execute("DELETE FROM cache_entries WHERE key = $1", [key]);
-  } catch {}
+  } catch {
+    return;
+  }
 };
 
 export const loadMeetingsCache = async () =>

@@ -7,6 +7,8 @@
     "build": "npm run build --workspace @opsui/shared && tsc -p tsconfig.json",
     "dev": "npm run build --workspace @opsui/shared && tsx watch src/server.ts",
     "start": "node dist/server.js",
+    "test": "tsx --test src/tests/run-tests.ts",
+    "test:watch": "tsx --test --watch src/tests/run-tests.ts",
     "openai:vector-store": "node ./scripts/create-vector-store.mjs"
   },
   "dependencies": {
