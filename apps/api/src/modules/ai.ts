@@ -1,4 +1,6 @@
-import OpenAI from "openai";
+import fs from "node:fs";
+import path from "node:path";
+import OpenAI, { toFile } from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
 import {
   aiMeetingGuideContentSchema,
@@ -58,6 +60,19 @@ const openai = env.openAiApiKey
       apiKey: env.openAiApiKey,
     })
   : null;
+
+const opsUiLogoReferencePath = path.resolve(
+  env.appRoot,
+  "assets",
+  "opsui-logo-reference.png",
+);
+const opsUiLogoReferenceDataUrl = (() => {
+  try {
+    return `data:image/png;base64,${fs.readFileSync(opsUiLogoReferencePath, "base64")}`;
+  } catch {
+    return null;
+  }
+})();
 
 const formatMeetingContext = (meeting: ReturnType<typeof toMeeting>) =>
   [
@@ -125,6 +140,13 @@ const opsUiSocialDirection = [
   "Core message: OpsUI helps operational businesses move from manual chaos to clearer control, better visibility, and scalable execution.",
 ].join("\n");
 
+const opsUiLogoDirection = [
+  "Logo rule: If the generated image includes an OpsUI logo, product logo, brand mark, app icon, watermark, or corner bug, use only the supplied OP logo reference image.",
+  "The correct logo is a square purple background with bold white uppercase OP letters. Keep the mark clean, flat, and readable.",
+  "Do not invent alternate OpsUI marks, do not use the old glowing black OP icon, and do not recolor or distort the OP logo.",
+  "If accurate logo placement is not possible, omit the logo instead of creating an incorrect logo.",
+].join("\n");
+
 const captionStrategistPrompt = [
   "Act as a senior social media strategist and copywriter.",
   "",
@@ -190,6 +212,9 @@ const buildImagePrompt = (input: {
     "Do not paste the full prompt into the image. Use only short, intentional poster copy when useful.",
     "Avoid childish visuals, fake hype, clutter, irrelevant stock imagery, and unreadable text.",
     "",
+    "Logo direction:",
+    opsUiLogoDirection,
+    "",
     "Fixed OpsUI social direction:",
     opsUiSocialDirection,
     "",
@@ -217,6 +242,53 @@ const findResponsesImageData = (response: unknown) => {
   return imageCall?.result ?? null;
 };
 
+const buildResponsesImageInput = (prompt: string) => {
+  const userContent: Array<
+    | { type: "input_text"; text: string }
+    | { type: "input_image"; image_url: string; detail: "high" }
+  > = [{ type: "input_text", text: prompt }];
+
+  if (opsUiLogoReferenceDataUrl) {
+    userContent.push({
+      type: "input_image",
+      image_url: opsUiLogoReferenceDataUrl,
+      detail: "high",
+    });
+  }
+
+  return [
+    {
+      role: "developer" as const,
+      content: [
+        {
+          type: "input_text" as const,
+          text: [
+            "Use the image_generation tool to create one premium portrait social media image for OpsUI.",
+            "Use the attached OP logo reference whenever the output needs a logo or brand mark.",
+            "Return the generated image only.",
+          ].join(" "),
+        },
+      ],
+    },
+    {
+      role: "user" as const,
+      content: userContent,
+    },
+  ];
+};
+
+const getLogoReferenceUpload = async () => {
+  if (!fs.existsSync(opsUiLogoReferencePath)) {
+    return null;
+  }
+
+  return toFile(
+    fs.createReadStream(opsUiLogoReferencePath),
+    "opsui-logo-reference.png",
+    { type: "image/png" },
+  );
+};
+
 const generatePostImageViaResponses = async (prompt: string) => {
   if (!openai) {
     throw new Error("OpenAI is not configured.");
@@ -224,17 +296,7 @@ const generatePostImageViaResponses = async (prompt: string) => {
 
   const response = await openai.responses.create({
     model: env.openAiImageReasoningModel,
-    input: [
-      {
-        role: "developer",
-        content:
-          "Use the image_generation tool to create one premium portrait social media image for OpsUI. Return the generated image only.",
-      },
-      {
-        role: "user",
-        content: prompt,
-      },
-    ],
+    input: buildResponsesImageInput(prompt),
     tools: [
       {
         type: "image_generation",
@@ -277,24 +339,41 @@ const generatePostImageWithFallback = async (prompt: string) => {
 
   for (const model of imageModels) {
     try {
-      const response = model === "dall-e-3"
-        ? await openai?.images.generate({
-            model,
-            prompt,
-            n: 1,
-            size: "1024x1792",
-            quality: "hd",
-            response_format: "b64_json",
-            style: "vivid",
-          })
-        : await openai?.images.generate({
-            model,
-            prompt,
-            n: 1,
-            size: "1024x1536",
-            quality: "high",
-            output_format: "jpeg",
-          });
+      let response;
+
+      if (model === "dall-e-3") {
+        response = await openai?.images.generate({
+          model,
+          prompt,
+          n: 1,
+          size: "1024x1792",
+          quality: "hd",
+          response_format: "b64_json",
+          style: "vivid",
+        });
+      } else {
+        const logoReferenceUpload = await getLogoReferenceUpload();
+
+        response = logoReferenceUpload
+          ? await openai?.images.edit({
+              model,
+              image: logoReferenceUpload,
+              prompt,
+              n: 1,
+              size: "1024x1536",
+              quality: "high",
+              output_format: "jpeg",
+              input_fidelity: "high",
+            })
+          : await openai?.images.generate({
+              model,
+              prompt,
+              n: 1,
+              size: "1024x1536",
+              quality: "high",
+              output_format: "jpeg",
+            });
+      }
       const imageData = response?.data?.[0]?.b64_json;
 
       if (imageData) {
