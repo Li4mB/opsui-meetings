@@ -138,6 +138,47 @@ const buildImagePrompt = (input: {
     .filter(Boolean)
     .join("\n\n");
 
+const imageModelFileExtension = (model: string) =>
+  model === "dall-e-3" ? "png" : "jpg";
+
+const imageModelMimeType = (model: string) =>
+  model === "dall-e-3" ? "image/png" : "image/jpeg";
+
+const fetchImageAsBase64 = async (url: string) => {
+  const response = await fetch(url);
+
+  if (!response.ok) {
+    throw new Error(`Generated image URL could not be downloaded (${response.status}).`);
+  }
+
+  const buffer = Buffer.from(await response.arrayBuffer());
+
+  return buffer.toString("base64");
+};
+
+const getGeneratedImageData = async (
+  response:
+    | {
+        data?: Array<{
+          b64_json?: string;
+          url?: string;
+        }>;
+      }
+    | undefined,
+) => {
+  const image = response?.data?.[0];
+
+  if (image?.b64_json) {
+    return image.b64_json;
+  }
+
+  if (image?.url) {
+    return fetchImageAsBase64(image.url);
+  }
+
+  throw new Error("OpenAI returned no image data.");
+};
+
 const generatePostImageWithFallback = async (prompt: string) => {
   const imageModels = [
     env.openAiImageModel,
@@ -166,14 +207,14 @@ const generatePostImageWithFallback = async (prompt: string) => {
             quality: "high",
             output_format: "jpeg",
           });
-      const imageData = response?.data?.[0]?.b64_json;
+      const imageData = await getGeneratedImageData(response);
 
-      if (imageData) {
-        return {
-          imageData,
-          model,
-        };
-      }
+      return {
+        imageData,
+        model,
+        mimeType: imageModelMimeType(model),
+        fileExtension: imageModelFileExtension(model),
+      };
     } catch (error) {
       lastError = error;
     }
@@ -266,17 +307,32 @@ export const registerAiRoutes = (app: import("fastify").FastifyInstance) => {
 
       const input = aiPostImageRequestSchema.parse(request.body);
       const tags = normalizeTags(input.tags);
-      const generatedImage = await generatePostImageWithFallback(
-        buildImagePrompt({
-          prompt: input.prompt,
-          caption: input.caption,
-          tags,
-        }),
-      );
+
+      let generatedImage: Awaited<ReturnType<typeof generatePostImageWithFallback>>;
+
+      try {
+        generatedImage = await generatePostImageWithFallback(
+          buildImagePrompt({
+            prompt: input.prompt,
+            caption: input.caption,
+            tags,
+          }),
+        );
+      } catch (error) {
+        app.log.error({ error }, "OpenAI post image generation failed");
+
+        const message = error instanceof Error
+          ? error.message
+          : "OpenAI image generation failed.";
+
+        return reply.status(502).send({
+          message: `OpenAI image generation failed: ${message}`,
+        });
+      }
 
       return aiPostImageSchema.parse({
-        imageDataUrl: `data:image/jpeg;base64,${generatedImage.imageData}`,
-        fileName: `opsui-post-${Date.now()}.jpg`,
+        imageDataUrl: `data:${generatedImage.mimeType};base64,${generatedImage.imageData}`,
+        fileName: `opsui-post-${Date.now()}.${generatedImage.fileExtension}`,
         tags,
         generatedAt: new Date().toISOString(),
         model: generatedImage.model,
