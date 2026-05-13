@@ -1,6 +1,6 @@
 {
   "$schema": "../../../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "OpsUI Meetings Dashboard",
+  "productName": "Opsui Admin Dashboard",
   "version": "0.1.2",
   "identifier": "com.opsui.meetings",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "OpsUI Meetings Dashboard",
+        "title": "Opsui Admin Dashboard",
         "width": 1540,
         "height": 980,
         "minWidth": 1180,

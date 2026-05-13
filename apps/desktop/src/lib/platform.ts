@@ -48,7 +48,7 @@ export const openCurrentMeetingWindow = async (url: string) => {
 
   const meetingWindow = new WebviewWindow(CURRENT_MEETING_WINDOW_LABEL, {
     url,
-    title: "OpsUI Meetings Dashboard - Current Meeting",
+    title: "Opsui Admin Dashboard - Current Meeting",
     width: 1380,
     height: 920,
     minWidth: 1080,

@@ -225,7 +225,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.prepare.outputs.tag }}
-          name: OpsUI Meetings Dashboard ${{ needs.prepare.outputs.version }}
+          name: Opsui Admin Dashboard ${{ needs.prepare.outputs.version }}
           generate_release_notes: true
           files: |
             release-assets/windows/**/*.exe
@@ -251,7 +251,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.prepare.outputs.tag }}
-          name: OpsUI Meetings Dashboard ${{ needs.prepare.outputs.version }}
+          name: Opsui Admin Dashboard ${{ needs.prepare.outputs.version }}
           generate_release_notes: false
           files: |
             release-assets/macos/**/*.app.tar.gz

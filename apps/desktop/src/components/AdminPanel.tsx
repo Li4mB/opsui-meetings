@@ -421,7 +421,7 @@ export const AdminPanel = ({
                       className="admin-action-btn admin-action-btn--danger"
                       disabled={isBusy || user.id === currentUserId}
                       onClick={() => {
-                        if (window.confirm(`Remove ${user.displayName} from OpsUI Meetings Dashboard?`)) {
+                        if (window.confirm(`Remove ${user.displayName} from Opsui Admin Dashboard?`)) {
                           void onDelete(user.id);
                         }
                       }}

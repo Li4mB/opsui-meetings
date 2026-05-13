@@ -228,8 +228,8 @@ export const AppShell = ({
             </span>
             <span className="app-logo__text">
               <span className="app-logo__primary">OpsUI</span>
-              <span className="app-logo__stack" aria-label="Meetings Dashboard">
-                <span className="app-logo__sub">Meetings</span>
+              <span className="app-logo__stack" aria-label="Admin Dashboard">
+                <span className="app-logo__sub">Admin</span>
                 <span className="app-logo__sub">Dashboard</span>
               </span>
             </span>

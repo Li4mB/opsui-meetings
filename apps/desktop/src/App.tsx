@@ -401,7 +401,7 @@ const App = () => {
         setBootError(
           error instanceof Error
             ? error.message
-            : "Unable to start OpsUI Meetings Dashboard",
+            : "Unable to start Opsui Admin Dashboard",
         );
         setBootState("error");
       }
@@ -760,9 +760,9 @@ const App = () => {
   if (bootState === "loading") {
     return (
       <div className="splash-screen">
-        <div className="eyebrow">OpsUI Meetings Dashboard</div>
+        <div className="eyebrow">Opsui Admin Dashboard</div>
         <h1>Loading workspace</h1>
-        <p>Preparing cached meetings, session state, and release policy.</p>
+        <p>Preparing cached workspace data, session state, and release policy.</p>
       </div>
     );
   }
@@ -771,7 +771,7 @@ const App = () => {
     return (
       <div className="splash-screen">
         <div className="eyebrow">Startup issue</div>
-        <h1>OpsUI Meetings Dashboard could not start</h1>
+        <h1>Opsui Admin Dashboard could not start</h1>
         <p>{bootError}</p>
       </div>
     );

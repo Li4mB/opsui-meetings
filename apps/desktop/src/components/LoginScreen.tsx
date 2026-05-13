@@ -25,13 +25,13 @@ export const LoginScreen = ({ approvedUsers, isLoading, error, onSubmit }: Props
           <span className="login-brand__mark">
             <img alt="OpsUI logo" className="login-brand__image" src={opsLogo} />
           </span>
-          <span className="login-brand__wordmark">OpsUI Meetings Dashboard</span>
+          <span className="login-brand__wordmark">Opsui Admin Dashboard</span>
         </div>
         <div className="eyebrow">OpsUI Internal Platform</div>
-        <h1>Meet every demo booking with the full picture.</h1>
+        <h1>Run every admin workflow with the full picture.</h1>
         <p>
-          OpsUI Meetings Dashboard gives the team a shared live calendar, fast assignment
-          workflows, and offline access to recently synced bookings.
+          Opsui Admin Dashboard gives the team a shared live calendar, social publishing
+          workspace, user controls, and fast assignment workflows.
         </p>
 
         <div className="hero-grid">
@@ -44,8 +44,8 @@ export const LoginScreen = ({ approvedUsers, isLoading, error, onSubmit }: Props
             <strong>No manual conversion</strong>
           </div>
           <div className="hero-card">
-            <span>Google Meet + brief links</span>
-            <strong>One-click prep</strong>
+            <span>Posts + admin controls</span>
+            <strong>One workspace</strong>
           </div>
         </div>
       </section>
@@ -108,7 +108,7 @@ export const LoginScreen = ({ approvedUsers, isLoading, error, onSubmit }: Props
           {error ? <div className="form-error">{error}</div> : null}
 
           <button className="primary-button" disabled={isLoading} type="submit">
-            {isLoading ? "Signing in..." : "Open OpsUI Meetings Dashboard"}
+            {isLoading ? "Signing in..." : "Open Opsui Admin Dashboard"}
           </button>
         </form>
       </section>
