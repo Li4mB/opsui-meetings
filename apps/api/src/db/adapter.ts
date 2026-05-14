@@ -4,6 +4,8 @@ import type {
   DbMeetingRequestRow,
   DbMeetingRow,
   DbPastMeetingRow,
+  DbScheduledSocialPostRow,
+  DbScheduledSocialPostStatus,
   DbUserRow,
 } from "../types.js";
 
@@ -22,6 +24,10 @@ export type DbMeetingWithAssignmentRow = DbMeetingRow & {
 export type DbPastMeetingWithAssignmentRow = DbPastMeetingRow & {
   assigned_user_name: string | null;
   assigned_user_color: string | null;
+};
+
+export type DbScheduledSocialPostWithCreatorRow = DbScheduledSocialPostRow & {
+  created_by_user_name: string | null;
 };
 
 export type ReplaceMeetingsResult = {
@@ -63,4 +69,19 @@ export interface StorageAdapter {
   insertMeetingRequest(row: DbMeetingRequestRow): Promise<void>;
   findMeetingRequestById(id: string): Promise<DbMeetingRequestRow | null>;
   deleteMeetingRequestById(id: string): Promise<void>;
+  insertScheduledSocialPosts(rows: DbScheduledSocialPostRow[]): Promise<void>;
+  listScheduledSocialPosts(): Promise<DbScheduledSocialPostWithCreatorRow[]>;
+  listDueScheduledSocialPosts(
+    nowIso: string,
+    limit: number,
+  ): Promise<DbScheduledSocialPostWithCreatorRow[]>;
+  updateScheduledSocialPostStatus(
+    id: string,
+    status: DbScheduledSocialPostStatus,
+    patch?: {
+      statusMessage?: string | null;
+      externalPostId?: string | null;
+      publishedAt?: string | null;
+    },
+  ): Promise<DbScheduledSocialPostWithCreatorRow | null>;
 }

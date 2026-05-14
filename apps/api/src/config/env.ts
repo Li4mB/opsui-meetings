@@ -102,6 +102,7 @@ export const env = {
   openAiVectorStoreId: process.env.OPSUI_OPENAI_VECTOR_STORE_ID ?? "",
   makeMeetingRequestWebhookUrl:
     process.env.OPSUI_MAKE_MEETING_REQUEST_WEBHOOK_URL ?? "",
+  socialPublishWebhookUrl: process.env.OPSUI_SOCIAL_PUBLISH_WEBHOOK_URL ?? "",
   dbProvider,
   dbUrl,
   dbSsl: parseBoolean(process.env.OPSUI_DB_SSL, dbProvider === "postgres"),

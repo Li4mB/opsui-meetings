@@ -1,9 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { AiPostContent } from "@opsui/shared";
+import type {
+  AiPostContent,
+  ScheduledSocialPlatform,
+  ScheduledSocialPost,
+} from "@opsui/shared";
 import opsLogo from "../assets/op.png";
-import { ApiError, generatePostContent, generatePostImage } from "../lib/api";
+import {
+  ApiError,
+  generatePostContent,
+  generatePostImage,
+  getScheduledSocialPosts,
+  scheduleSocialPosts,
+} from "../lib/api";
 
-type SocialPlatform = "facebook" | "linkedin" | "twitter" | "instagram";
+type SocialPlatform = ScheduledSocialPlatform;
 
 type SocialPostDraft = {
   platform: SocialPlatform;
@@ -19,17 +29,6 @@ type PostImage = {
   url: string;
   generated: boolean;
   objectUrl: boolean;
-};
-
-type ScheduledSocialPost = {
-  id: string;
-  platform: SocialPlatform;
-  caption: string;
-  imageUrl: string | null;
-  imageName: string | null;
-  scheduledFor: string;
-  timezone: string;
-  createdAt: string;
 };
 
 type CalendarDay = {
@@ -110,7 +109,6 @@ const fallbackHashtags = [
   "anzbusiness",
 ];
 
-const scheduledPostsStorageKey = "opsui-admin-dashboard::scheduled-social-posts";
 const calendarWeekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 const buildImageId = (file: File) =>
@@ -334,57 +332,8 @@ const buildCalendarImageThumbnail = (source: string) =>
     image.src = source;
   });
 
-const isSocialPlatform = (value: unknown): value is SocialPlatform =>
-  typeof value === "string" && platformIds.includes(value as SocialPlatform);
-
 const compareScheduledPosts = (left: ScheduledSocialPost, right: ScheduledSocialPost) =>
   new Date(left.scheduledFor).getTime() - new Date(right.scheduledFor).getTime();
-
-const parseStoredScheduledPosts = (value: string | null): ScheduledSocialPost[] => {
-  if (!value) {
-    return [];
-  }
-
-  try {
-    const parsed = JSON.parse(value);
-
-    if (!Array.isArray(parsed)) {
-      return [];
-    }
-
-    return parsed
-      .flatMap((item): ScheduledSocialPost[] => {
-        if (!item || typeof item !== "object") {
-          return [];
-        }
-
-        const raw = item as Record<string, unknown>;
-        const platform = raw.platform;
-        const scheduledFor = typeof raw.scheduledFor === "string" ? raw.scheduledFor : "";
-        const id = typeof raw.id === "string" ? raw.id : "";
-
-        if (!id || !isSocialPlatform(platform) || Number.isNaN(new Date(scheduledFor).getTime())) {
-          return [];
-        }
-
-        return [
-          {
-            id,
-            platform,
-            caption: typeof raw.caption === "string" ? raw.caption : "",
-            imageUrl: typeof raw.imageUrl === "string" ? raw.imageUrl : null,
-            imageName: typeof raw.imageName === "string" ? raw.imageName : null,
-            scheduledFor,
-            timezone: typeof raw.timezone === "string" ? raw.timezone : getUserTimezone(),
-            createdAt: typeof raw.createdAt === "string" ? raw.createdAt : new Date().toISOString(),
-          },
-        ];
-      })
-      .sort(compareScheduledPosts);
-  } catch {
-    return [];
-  }
-};
 
 const formatWithTimezone = (
   isoDate: string,
@@ -479,7 +428,8 @@ export const PostPanel = ({ authToken }: Props) => {
   const [saveNotice, setSaveNotice] = useState<string | null>(null);
   const [scheduleAt, setScheduleAt] = useState(buildDefaultScheduleValue);
   const [scheduledPosts, setScheduledPosts] = useState<ScheduledSocialPost[]>([]);
-  const [isScheduledQueueLoaded, setIsScheduledQueueLoaded] = useState(false);
+  const [isScheduledQueueLoading, setIsScheduledQueueLoading] = useState(false);
+  const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
   const [showScheduledQueue, setShowScheduledQueue] = useState(false);
   const [queueMonth, setQueueMonth] = useState(() => new Date());
   const masterCaptionInputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -531,17 +481,36 @@ export const PostPanel = ({ authToken }: Props) => {
   }, []);
 
   useEffect(() => {
-    setScheduledPosts(parseStoredScheduledPosts(localStorage.getItem(scheduledPostsStorageKey)));
-    setIsScheduledQueueLoaded(true);
-  }, []);
+    let cancelled = false;
 
-  useEffect(() => {
-    if (!isScheduledQueueLoaded) {
-      return;
-    }
+    const loadScheduledPosts = async () => {
+      setIsScheduledQueueLoading(true);
 
-    localStorage.setItem(scheduledPostsStorageKey, JSON.stringify(scheduledPosts));
-  }, [isScheduledQueueLoaded, scheduledPosts]);
+      try {
+        const response = await getScheduledSocialPosts(authToken);
+
+        if (!cancelled) {
+          setScheduledPosts(response.posts);
+        }
+      } catch {
+        if (!cancelled) {
+          setSaveNotice("Unable to load the shared posting queue.");
+        }
+      } finally {
+        if (!cancelled) {
+          setIsScheduledQueueLoading(false);
+        }
+      }
+    };
+
+    void loadScheduledPosts();
+    const interval = window.setInterval(() => void loadScheduledPosts(), 60_000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [authToken]);
 
   useEffect(() => {
     if (!saveNotice) {
@@ -563,6 +532,21 @@ export const PostPanel = ({ authToken }: Props) => {
     input.style.height = "auto";
     input.style.height = `${input.scrollHeight}px`;
   }, [masterCaption]);
+
+  useEffect(() => {
+    if (!isScheduleModalOpen) {
+      return undefined;
+    }
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsScheduleModalOpen(false);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isScheduleModalOpen]);
 
   const replaceImage = (image: PostImage | null) => {
     setPostImage((current) => {
@@ -778,11 +762,42 @@ export const PostPanel = ({ authToken }: Props) => {
     setQueueMonth((current) => new Date(current.getFullYear(), current.getMonth() + monthOffset, 1));
   };
 
-  const handlePush = async () => {
-    const scheduledDate = new Date(scheduleAt);
-
+  const validateScheduleContent = () => {
     if (!selectedPlatforms.length) {
       setSaveNotice("Select at least one platform before scheduling.");
+      return false;
+    }
+
+    if (!masterCaption.trim() && !postImage) {
+      setSaveNotice("Add a caption or image before scheduling.");
+      return false;
+    }
+
+    return true;
+  };
+
+  const handleOpenSchedule = () => {
+    if (!validateScheduleContent()) {
+      return;
+    }
+
+    const scheduledDate = new Date(scheduleAt);
+
+    if (Number.isNaN(scheduledDate.getTime()) || scheduledDate.getTime() <= Date.now()) {
+      setScheduleAt(buildDefaultScheduleValue());
+    }
+
+    setIsScheduleModalOpen(true);
+  };
+
+  const handlePush = () => {
+    setSaveNotice("Immediate publishing is not connected yet. Use Schedule to queue a timed post.");
+  };
+
+  const handleScheduleSubmit = async () => {
+    const scheduledDate = new Date(scheduleAt);
+
+    if (!validateScheduleContent()) {
       return;
     }
 
@@ -804,25 +819,32 @@ export const PostPanel = ({ authToken }: Props) => {
     setIsSchedulingPost(true);
 
     try {
-      const createdAt = new Date().toISOString();
       const scheduledFor = scheduledDate.toISOString();
-      const imageUrl = postImage ? await buildCalendarImageThumbnail(postImage.url) : null;
-      const entries = selectedPlatforms.map((platform) => ({
-        id: `${platform}-${scheduledDate.getTime()}-${crypto.randomUUID()}`,
-        platform,
-        caption: (drafts[platform].caption || masterCaption).trim(),
-        imageUrl,
+      const thumbnailDataUrl = postImage ? await buildCalendarImageThumbnail(postImage.url) : null;
+      const response = await scheduleSocialPosts(authToken, {
+        posts: selectedPlatforms.map((platform) => ({
+          platform,
+          caption: (drafts[platform].caption || masterCaption).trim(),
+        })),
+        imageDataUrl: postImage?.url ?? null,
         imageName: postImage?.name ?? null,
+        thumbnailDataUrl,
         scheduledFor,
         timezone: userTimezone,
-        createdAt,
-      }));
+      });
 
-      setScheduledPosts((current) => [...current, ...entries].sort(compareScheduledPosts));
+      setScheduledPosts(response.posts);
       setShowScheduledQueue(true);
       setQueueMonth(new Date(scheduledDate.getFullYear(), scheduledDate.getMonth(), 1));
+      setIsScheduleModalOpen(false);
       setSaveNotice(
-        `${entries.length} platform post${entries.length === 1 ? "" : "s"} queued for ${formatScheduledDateTime(scheduledFor, userTimezone)}. Accounts not connected yet.`,
+        `${selectedPlatforms.length} platform post${selectedPlatforms.length === 1 ? "" : "s"} scheduled for ${formatScheduledDateTime(scheduledFor, userTimezone)}.`,
+      );
+    } catch (error) {
+      setSaveNotice(
+        error instanceof ApiError
+          ? `Schedule failed: ${error.message}`
+          : "Schedule failed. Try again.",
       );
     } finally {
       setIsSchedulingPost(false);
@@ -1082,23 +1104,21 @@ export const PostPanel = ({ authToken }: Props) => {
               <h2>Ready queue</h2>
             </div>
             <div className="post-schedule-actions">
-              <label className="post-schedule-field">
-                <span>Go live</span>
-                <input
-                  min={minimumScheduleAt}
-                  onChange={(event) => setScheduleAt(event.target.value)}
-                  type="datetime-local"
-                  value={scheduleAt}
-                />
-                <small>{userTimezone}</small>
-              </label>
               <button
-                className="post-push-btn"
+                className="post-schedule-btn"
                 disabled={!selectedPlatforms.length || isSchedulingPost}
-                onClick={() => void handlePush()}
+                onClick={handleOpenSchedule}
                 type="button"
               >
-                {isSchedulingPost ? "Queuing..." : "Push"}
+                Schedule
+              </button>
+              <button
+                className="post-push-btn"
+                disabled={!selectedPlatforms.length}
+                onClick={handlePush}
+                type="button"
+              >
+                Push
               </button>
             </div>
           </div>
@@ -1187,8 +1207,10 @@ export const PostPanel = ({ authToken }: Props) => {
           <div>
             <span className="eyebrow">Scheduled queue</span>
             <strong>
-              {sortedScheduledPosts.length
-                ? `${sortedScheduledPosts.length} staged platform post${sortedScheduledPosts.length === 1 ? "" : "s"}`
+              {isScheduledQueueLoading
+                ? "Loading shared queue..."
+                : sortedScheduledPosts.length
+                ? `${sortedScheduledPosts.length} scheduled platform post${sortedScheduledPosts.length === 1 ? "" : "s"}`
                 : "No scheduled posts yet"}
             </strong>
           </div>
@@ -1249,10 +1271,10 @@ export const PostPanel = ({ authToken }: Props) => {
                         <article
                           className="post-calendar-event"
                           key={event.id}
-                          title={`${meta.label} at ${formatScheduledTime(event.scheduledFor, event.timezone)}`}
+                          title={`${meta.label} at ${formatScheduledTime(event.scheduledFor, event.timezone)} - ${event.statusMessage ?? event.status}`}
                         >
-                          {event.imageUrl ? (
-                            <img alt={event.imageName ?? `${meta.label} scheduled image`} src={event.imageUrl} />
+                          {event.thumbnailDataUrl ? (
+                            <img alt={event.imageName ?? `${meta.label} scheduled image`} src={event.thumbnailDataUrl} />
                           ) : (
                             <span className="post-calendar-event__placeholder">
                               {meta.shortLabel}
@@ -1261,6 +1283,7 @@ export const PostPanel = ({ authToken }: Props) => {
                           <div>
                             <span>{meta.label}</span>
                             <strong>{formatScheduledTime(event.scheduledFor, event.timezone)}</strong>
+                            <small>{event.status.replace(/_/g, " ")}</small>
                           </div>
                         </article>
                       );
@@ -1274,11 +1297,90 @@ export const PostPanel = ({ authToken }: Props) => {
             </div>
 
             <p className="post-calendar-note">
-              Times use {userTimezone}. These posts are queued locally until platform accounts are connected.
+              Times use {userTimezone}. The queue is shared with every OpsUI member.
             </p>
           </section>
         ) : null}
       </div>
+
+      {isScheduleModalOpen ? (
+        <div
+          className="post-schedule-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="post-schedule-title"
+        >
+          <div className="post-schedule-modal__backdrop" onClick={() => setIsScheduleModalOpen(false)} />
+          <section className="post-schedule-dialog">
+            <div className="post-schedule-dialog__header">
+              <div>
+                <span className="eyebrow">Schedule post</span>
+                <h2 id="post-schedule-title">Choose go-live time</h2>
+              </div>
+              <button
+                className="post-schedule-dialog__close"
+                onClick={() => setIsScheduleModalOpen(false)}
+                type="button"
+                aria-label="Close schedule dialog"
+              >
+                x
+              </button>
+            </div>
+
+            <div className="post-schedule-summary">
+              <div>
+                <span>Platforms</span>
+                <strong>{selectedPlatforms.length} selected</strong>
+              </div>
+              <div>
+                <span>Timezone</span>
+                <strong>{userTimezone}</strong>
+              </div>
+            </div>
+
+            <div className="post-schedule-platform-row">
+              {selectedPlatforms.map((platform) => (
+                <span key={platform}>{platformById[platform].label}</span>
+              ))}
+            </div>
+
+            <label className="post-schedule-picker">
+              <span>Date and time</span>
+              <input
+                autoFocus
+                min={minimumScheduleAt}
+                onChange={(event) => setScheduleAt(event.target.value)}
+                type="datetime-local"
+                value={scheduleAt}
+              />
+            </label>
+
+            <div className="post-schedule-dialog__actions">
+              <button
+                className="post-schedule-cancel"
+                onClick={() => setIsScheduleModalOpen(false)}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className="post-schedule-confirm"
+                disabled={isSchedulingPost}
+                onClick={() => void handleScheduleSubmit()}
+                type="button"
+              >
+                {isSchedulingPost ? "Scheduling..." : "Schedule post"}
+              </button>
+            </div>
+
+            <p>
+              Scheduled posts are stored in the shared OpsUI queue. When the publish
+              time arrives, the server will attempt to send them through the connected
+              publishing service.
+            </p>
+          </section>
+        </div>
+      ) : null}
 
       {saveNotice ? (
         <div className="post-save-toast" role="status" aria-live="polite">

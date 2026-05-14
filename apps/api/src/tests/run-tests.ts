@@ -12,7 +12,7 @@ import os from "node:os";
 import { env } from "../config/env.js";
 import { createSqliteAdapter } from "../db/sqlite-adapter.js";
 import type { StorageAdapter } from "../db/adapter.js";
-import type { CalendarMeeting, DbUserRow } from "../types.js";
+import type { CalendarMeeting, DbScheduledSocialPostRow, DbUserRow } from "../types.js";
 
 // Save original dbPath so we can restore it
 const originalDbPath = env.dbPath;
@@ -293,5 +293,61 @@ describe("7. Server Restart — Data persists across restarts", () => {
     const user = await a.findUserById(payload.sub as string);
     assert.ok(user); assert.equal(user!.active, 1);
     await a.close();
+  });
+});
+
+// ========== 8. Scheduled Social Posts ==========
+describe("8. Scheduled Social Posts", () => {
+  let db: string, adapter: StorageAdapter, admin: DbUserRow;
+
+  before(async () => {
+    db = mkTemp(); env.dbPath = db;
+    adapter = createSqliteAdapter(); await adapter.initialize(); await adapter.seedAdminIfMissing();
+    admin = (await adapter.findActiveUserByUsername("opsui-admin"))!;
+  });
+  after(async () => { await adapter.close(); cleanup(db); });
+
+  it("stores and lists shared scheduled posts", async () => {
+    const now = new Date().toISOString();
+    const row: DbScheduledSocialPostRow = {
+      id: nanoid(),
+      platform: "linkedin",
+      caption: "Scheduled OpsUI post",
+      image_data_url: "data:image/png;base64,abc",
+      image_name: "post.png",
+      thumbnail_data_url: "data:image/png;base64,thumb",
+      scheduled_for: "2026-06-01T00:00:00.000Z",
+      timezone: "Australia/Sydney",
+      status: "scheduled",
+      status_message: "Waiting",
+      external_post_id: null,
+      published_at: null,
+      created_by_user_id: admin.id,
+      created_at: now,
+      updated_at: now,
+    };
+
+    await adapter.insertScheduledSocialPosts([row]);
+    const posts = await adapter.listScheduledSocialPosts();
+
+    assert.equal(posts.length, 1);
+    assert.equal(posts[0].caption, "Scheduled OpsUI post");
+    assert.equal(posts[0].created_by_user_name, "OpsUI Admin");
+  });
+
+  it("finds due posts and updates publish status", async () => {
+    const due = await adapter.listDueScheduledSocialPosts("2026-06-01T00:01:00.000Z", 10);
+    assert.equal(due.length, 1);
+
+    const updated = await adapter.updateScheduledSocialPostStatus(due[0].id, "published", {
+      statusMessage: "Published",
+      externalPostId: "external-1",
+      publishedAt: "2026-06-01T00:01:00.000Z",
+    });
+
+    assert.ok(updated);
+    assert.equal(updated!.status, "published");
+    assert.equal(updated!.external_post_id, "external-1");
+    assert.equal((await adapter.listDueScheduledSocialPosts("2026-06-01T00:02:00.000Z", 10)).length, 0);
   });
 });

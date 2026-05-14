@@ -3356,27 +3356,28 @@ label {
   flex-wrap: wrap;
 }
 
-.post-schedule-field {
-  display: grid;
-  gap: 4px;
-  min-width: 230px;
-  color: var(--color-text-secondary);
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.post-schedule-field input {
+.post-schedule-btn {
+  min-width: 104px;
   min-height: 38px;
-  border-color: rgba(214, 173, 45, 0.24);
-  background: rgba(255, 255, 255, 0.035);
-  color: var(--color-text-primary);
+  padding: 0 14px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: var(--radius-sm);
+  background: linear-gradient(180deg, #565656, #343434);
+  color: #f5f5f5;
+  font-size: 12px;
+  font-weight: 900;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
-.post-schedule-field small {
-  color: var(--color-text-muted);
-  font-family: var(--font-mono);
-  font-size: 10px;
-  font-weight: 700;
+.post-schedule-btn:hover:not(:disabled) {
+  border-color: rgba(255, 255, 255, 0.2);
+  background: linear-gradient(180deg, #626262, #3d3d3d);
+}
+
+.post-schedule-btn:disabled {
+  cursor: not-allowed;
+  filter: grayscale(0.4);
+  opacity: 0.55;
 }
 
 .post-platform-grid {
@@ -3698,6 +3699,18 @@ label {
   font-size: 10px;
 }
 
+.post-calendar-event small {
+  display: block;
+  margin-top: 2px;
+  overflow: hidden;
+  color: #b4a985;
+  font-size: 10px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  text-transform: capitalize;
+  white-space: nowrap;
+}
+
 .post-calendar-more {
   color: var(--color-text-muted);
   font-size: 11px;
@@ -3709,6 +3722,161 @@ label {
   color: var(--color-text-muted);
   font-size: 12px;
   line-height: 1.5;
+}
+
+.post-schedule-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 150;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.post-schedule-modal__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.72);
+  backdrop-filter: blur(10px);
+}
+
+.post-schedule-dialog {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  gap: 16px;
+  width: min(460px, 100%);
+  padding: 20px;
+  border: 1px solid rgba(214, 173, 45, 0.2);
+  border-radius: 18px;
+  background:
+    radial-gradient(circle at top right, rgba(214, 173, 45, 0.12), transparent 34%),
+    linear-gradient(180deg, rgba(23, 23, 21, 0.98), rgba(9, 9, 8, 0.98));
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.62);
+}
+
+.post-schedule-dialog__header,
+.post-schedule-dialog__actions,
+.post-schedule-summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.post-schedule-dialog__header h2 {
+  font-family: var(--font-display);
+  font-size: 1.34rem;
+  letter-spacing: 0;
+}
+
+.post-schedule-dialog__close {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--color-text-secondary);
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.post-schedule-summary {
+  padding: 12px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.post-schedule-summary span,
+.post-schedule-picker span {
+  display: block;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.post-schedule-summary strong {
+  display: block;
+  margin-top: 4px;
+  color: var(--color-text-primary);
+  font-size: 12px;
+}
+
+.post-schedule-platform-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.post-schedule-platform-row span {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid rgba(214, 173, 45, 0.2);
+  border-radius: 999px;
+  background: rgba(214, 173, 45, 0.08);
+  color: #f8e7a2;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.post-schedule-picker {
+  display: grid;
+  gap: 8px;
+}
+
+.post-schedule-picker input {
+  min-height: 48px;
+  border-color: rgba(214, 173, 45, 0.3);
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--color-text-primary);
+  font-size: 15px;
+  font-weight: 800;
+}
+
+.post-schedule-dialog__actions {
+  justify-content: flex-end;
+}
+
+.post-schedule-cancel,
+.post-schedule-confirm {
+  min-height: 40px;
+  padding: 0 14px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.post-schedule-cancel {
+  border: 1px solid var(--color-border-subtle);
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--color-text-secondary);
+}
+
+.post-schedule-confirm {
+  border: 1px solid rgba(214, 173, 45, 0.42);
+  background: linear-gradient(180deg, var(--color-gold-bright), var(--color-gold));
+  color: var(--color-text-inverse);
+}
+
+.post-schedule-confirm:disabled {
+  cursor: not-allowed;
+  filter: grayscale(0.45);
+  opacity: 0.65;
+}
+
+.post-schedule-dialog p {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.55;
 }
 
 .post-tag-chip {
@@ -5657,10 +5825,17 @@ label {
     width: 100%;
   }
 
-  .post-schedule-field,
+  .post-schedule-btn,
   .post-push-btn,
   .post-view-queue-btn {
     width: 100%;
+  }
+
+  .post-schedule-dialog__header,
+  .post-schedule-dialog__actions,
+  .post-schedule-summary {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .post-platform-selector {
