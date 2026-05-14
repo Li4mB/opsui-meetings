@@ -21,6 +21,24 @@ type PostImage = {
   objectUrl: boolean;
 };
 
+type ScheduledSocialPost = {
+  id: string;
+  platform: SocialPlatform;
+  caption: string;
+  imageUrl: string | null;
+  imageName: string | null;
+  scheduledFor: string;
+  timezone: string;
+  createdAt: string;
+};
+
+type CalendarDay = {
+  key: string;
+  date: Date;
+  inCurrentMonth: boolean;
+  events: ScheduledSocialPost[];
+};
+
 type Props = {
   authToken: string;
 };
@@ -92,6 +110,9 @@ const fallbackHashtags = [
   "anzbusiness",
 ];
 
+const scheduledPostsStorageKey = "opsui-admin-dashboard::scheduled-social-posts";
+const calendarWeekdays = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
 const buildImageId = (file: File) =>
   `${file.name}-${file.size}-${file.lastModified}-${crypto.randomUUID()}`;
 
@@ -153,6 +174,9 @@ const escapeSvgText = (value: string) =>
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;");
+
+const buildSvgDataUrl = (svg: string) =>
+  `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
 
 const buildLocalPosterSvg = (prompt: string) => {
   const normalized = prompt.toLowerCase();
@@ -242,6 +266,205 @@ const createDrafts = (caption: string): Record<SocialPlatform, SocialPostDraft> 
     ]),
   ) as Record<SocialPlatform, SocialPostDraft>;
 
+const getUserTimezone = () => {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || "Local timezone";
+  } catch {
+    return "Local timezone";
+  }
+};
+
+const padDatePart = (value: number) => value.toString().padStart(2, "0");
+
+const formatDateTimeLocalValue = (date: Date) =>
+  `${date.getFullYear()}-${padDatePart(date.getMonth() + 1)}-${padDatePart(date.getDate())}T${padDatePart(date.getHours())}:${padDatePart(date.getMinutes())}`;
+
+const buildDefaultScheduleValue = () => {
+  const date = new Date();
+
+  date.setHours(date.getHours() + 1, 0, 0, 0);
+  return formatDateTimeLocalValue(date);
+};
+
+const readFileAsDataUrl = (file: File) =>
+  new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      if (typeof reader.result === "string") {
+        resolve(reader.result);
+      } else {
+        reject(new Error("Uploaded image could not be read."));
+      }
+    };
+    reader.onerror = () => reject(reader.error ?? new Error("Uploaded image could not be read."));
+    reader.readAsDataURL(file);
+  });
+
+const buildCalendarImageThumbnail = (source: string) =>
+  new Promise<string | null>((resolve) => {
+    const image = new Image();
+    const fallback = source.length < 500_000 ? source : null;
+
+    image.onload = () => {
+      const maxSize = 220;
+      const scale = Math.min(1, maxSize / Math.max(image.width, image.height));
+      const width = Math.max(1, Math.round(image.width * scale));
+      const height = Math.max(1, Math.round(image.height * scale));
+      const canvas = document.createElement("canvas");
+      const context = canvas.getContext("2d");
+
+      if (!context) {
+        resolve(fallback);
+        return;
+      }
+
+      canvas.width = width;
+      canvas.height = height;
+      context.drawImage(image, 0, 0, width, height);
+
+      try {
+        resolve(canvas.toDataURL("image/jpeg", 0.82));
+      } catch {
+        resolve(fallback);
+      }
+    };
+
+    image.onerror = () => resolve(fallback);
+    image.src = source;
+  });
+
+const isSocialPlatform = (value: unknown): value is SocialPlatform =>
+  typeof value === "string" && platformIds.includes(value as SocialPlatform);
+
+const compareScheduledPosts = (left: ScheduledSocialPost, right: ScheduledSocialPost) =>
+  new Date(left.scheduledFor).getTime() - new Date(right.scheduledFor).getTime();
+
+const parseStoredScheduledPosts = (value: string | null): ScheduledSocialPost[] => {
+  if (!value) {
+    return [];
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+
+    return parsed
+      .flatMap((item): ScheduledSocialPost[] => {
+        if (!item || typeof item !== "object") {
+          return [];
+        }
+
+        const raw = item as Record<string, unknown>;
+        const platform = raw.platform;
+        const scheduledFor = typeof raw.scheduledFor === "string" ? raw.scheduledFor : "";
+        const id = typeof raw.id === "string" ? raw.id : "";
+
+        if (!id || !isSocialPlatform(platform) || Number.isNaN(new Date(scheduledFor).getTime())) {
+          return [];
+        }
+
+        return [
+          {
+            id,
+            platform,
+            caption: typeof raw.caption === "string" ? raw.caption : "",
+            imageUrl: typeof raw.imageUrl === "string" ? raw.imageUrl : null,
+            imageName: typeof raw.imageName === "string" ? raw.imageName : null,
+            scheduledFor,
+            timezone: typeof raw.timezone === "string" ? raw.timezone : getUserTimezone(),
+            createdAt: typeof raw.createdAt === "string" ? raw.createdAt : new Date().toISOString(),
+          },
+        ];
+      })
+      .sort(compareScheduledPosts);
+  } catch {
+    return [];
+  }
+};
+
+const formatWithTimezone = (
+  isoDate: string,
+  options: Intl.DateTimeFormatOptions,
+  timezone: string,
+) => {
+  const date = new Date(isoDate);
+
+  if (Number.isNaN(date.getTime())) {
+    return "Invalid date";
+  }
+
+  try {
+    return new Intl.DateTimeFormat(undefined, {
+      ...options,
+      ...(timezone !== "Local timezone" ? { timeZone: timezone } : {}),
+    }).format(date);
+  } catch {
+    return new Intl.DateTimeFormat(undefined, options).format(date);
+  }
+};
+
+const formatScheduledDateTime = (isoDate: string, timezone: string) =>
+  formatWithTimezone(
+    isoDate,
+    {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    },
+    timezone,
+  );
+
+const formatScheduledTime = (isoDate: string, timezone: string) =>
+  formatWithTimezone(
+    isoDate,
+    {
+      hour: "numeric",
+      minute: "2-digit",
+    },
+    timezone,
+  );
+
+const getLocalDateKey = (date: Date) =>
+  `${date.getFullYear()}-${padDatePart(date.getMonth() + 1)}-${padDatePart(date.getDate())}`;
+
+const buildCalendarDays = (
+  monthDate: Date,
+  scheduledPosts: ScheduledSocialPost[],
+): CalendarDay[] => {
+  const firstDay = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1);
+  const startDate = new Date(firstDay);
+  const postsByDate = new Map<string, ScheduledSocialPost[]>();
+
+  startDate.setDate(firstDay.getDate() - firstDay.getDay());
+
+  for (const post of scheduledPosts) {
+    const key = getLocalDateKey(new Date(post.scheduledFor));
+    const events = postsByDate.get(key) ?? [];
+
+    events.push(post);
+    postsByDate.set(key, events);
+  }
+
+  return Array.from({ length: 42 }, (_, index) => {
+    const date = new Date(startDate);
+
+    date.setDate(startDate.getDate() + index);
+
+    return {
+      key: getLocalDateKey(date),
+      date,
+      inCurrentMonth: date.getMonth() === monthDate.getMonth(),
+      events: postsByDate.get(getLocalDateKey(date)) ?? [],
+    };
+  });
+};
+
 export const PostPanel = ({ authToken }: Props) => {
   const [captionPrompt, setCaptionPrompt] = useState(defaultCaptionPrompt);
   const [imagePrompt, setImagePrompt] = useState(defaultImagePrompt);
@@ -252,9 +475,16 @@ export const PostPanel = ({ authToken }: Props) => {
   const [drafts, setDrafts] = useState(createDrafts(""));
   const [isGeneratingCaption, setIsGeneratingCaption] = useState(false);
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
+  const [isSchedulingPost, setIsSchedulingPost] = useState(false);
   const [saveNotice, setSaveNotice] = useState<string | null>(null);
+  const [scheduleAt, setScheduleAt] = useState(buildDefaultScheduleValue);
+  const [scheduledPosts, setScheduledPosts] = useState<ScheduledSocialPost[]>([]);
+  const [isScheduledQueueLoaded, setIsScheduledQueueLoaded] = useState(false);
+  const [showScheduledQueue, setShowScheduledQueue] = useState(false);
+  const [queueMonth, setQueueMonth] = useState(() => new Date());
   const masterCaptionInputRef = useRef<HTMLTextAreaElement | null>(null);
   const postImageRef = useRef<PostImage | null>(null);
+  const userTimezone = useMemo(getUserTimezone, []);
 
   const previewTime = useMemo(
     () =>
@@ -272,6 +502,23 @@ export const PostPanel = ({ authToken }: Props) => {
     : fallbackHashtags;
   const hasImage = Boolean(postImage);
   const readyToPreview = masterCaption.trim().length > 0 || hasImage;
+  const minimumScheduleAt = useMemo(() => formatDateTimeLocalValue(new Date()), []);
+  const sortedScheduledPosts = useMemo(
+    () => [...scheduledPosts].sort(compareScheduledPosts),
+    [scheduledPosts],
+  );
+  const calendarDays = useMemo(
+    () => buildCalendarDays(queueMonth, sortedScheduledPosts),
+    [queueMonth, sortedScheduledPosts],
+  );
+  const queueMonthLabel = useMemo(
+    () =>
+      new Intl.DateTimeFormat(undefined, {
+        month: "long",
+        year: "numeric",
+      }).format(queueMonth),
+    [queueMonth],
+  );
 
   useEffect(() => {
     postImageRef.current = postImage;
@@ -282,6 +529,19 @@ export const PostPanel = ({ authToken }: Props) => {
       revokePostImage(postImageRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    setScheduledPosts(parseStoredScheduledPosts(localStorage.getItem(scheduledPostsStorageKey)));
+    setIsScheduledQueueLoaded(true);
+  }, []);
+
+  useEffect(() => {
+    if (!isScheduledQueueLoaded) {
+      return;
+    }
+
+    localStorage.setItem(scheduledPostsStorageKey, JSON.stringify(scheduledPosts));
+  }, [isScheduledQueueLoaded, scheduledPosts]);
 
   useEffect(() => {
     if (!saveNotice) {
@@ -406,9 +666,9 @@ export const PostPanel = ({ authToken }: Props) => {
       replaceImage({
         id: `fallback-${Date.now()}-${crypto.randomUUID()}`,
         name: "opsui-social-fallback.svg",
-        url: URL.createObjectURL(new Blob([svg], { type: "image/svg+xml" })),
+        url: buildSvgDataUrl(svg),
         generated: true,
-        objectUrl: true,
+        objectUrl: false,
       });
       setSaveNotice(
         error instanceof ApiError
@@ -420,7 +680,7 @@ export const PostPanel = ({ authToken }: Props) => {
     }
   };
 
-  const handleImageUpload = (files: FileList | null) => {
+  const handleImageUpload = async (files: FileList | null) => {
     const file = Array.from(files ?? []).find((item) => item.type.startsWith("image/"));
 
     if (!file) {
@@ -428,14 +688,18 @@ export const PostPanel = ({ authToken }: Props) => {
       return;
     }
 
-    replaceImage({
-      id: buildImageId(file),
-      name: file.name,
-      url: URL.createObjectURL(file),
-      generated: false,
-      objectUrl: true,
-    });
-    setSaveNotice("Image uploaded.");
+    try {
+      replaceImage({
+        id: buildImageId(file),
+        name: file.name,
+        url: await readFileAsDataUrl(file),
+        generated: false,
+        objectUrl: false,
+      });
+      setSaveNotice("Image uploaded.");
+    } catch {
+      setSaveNotice("Uploaded image could not be read.");
+    }
   };
 
   const handleDownloadImage = () => {
@@ -510,8 +774,59 @@ export const PostPanel = ({ authToken }: Props) => {
     }
   };
 
-  const handlePush = () => {
-    setSaveNotice("Platform accounts are not connected yet. Push is staged only.");
+  const shiftQueueMonth = (monthOffset: number) => {
+    setQueueMonth((current) => new Date(current.getFullYear(), current.getMonth() + monthOffset, 1));
+  };
+
+  const handlePush = async () => {
+    const scheduledDate = new Date(scheduleAt);
+
+    if (!selectedPlatforms.length) {
+      setSaveNotice("Select at least one platform before scheduling.");
+      return;
+    }
+
+    if (Number.isNaN(scheduledDate.getTime())) {
+      setSaveNotice("Choose a valid go-live date and time.");
+      return;
+    }
+
+    if (scheduledDate.getTime() <= Date.now()) {
+      setSaveNotice("Choose a future go-live time.");
+      return;
+    }
+
+    if (!masterCaption.trim() && !postImage) {
+      setSaveNotice("Add a caption or image before scheduling.");
+      return;
+    }
+
+    setIsSchedulingPost(true);
+
+    try {
+      const createdAt = new Date().toISOString();
+      const scheduledFor = scheduledDate.toISOString();
+      const imageUrl = postImage ? await buildCalendarImageThumbnail(postImage.url) : null;
+      const entries = selectedPlatforms.map((platform) => ({
+        id: `${platform}-${scheduledDate.getTime()}-${crypto.randomUUID()}`,
+        platform,
+        caption: (drafts[platform].caption || masterCaption).trim(),
+        imageUrl,
+        imageName: postImage?.name ?? null,
+        scheduledFor,
+        timezone: userTimezone,
+        createdAt,
+      }));
+
+      setScheduledPosts((current) => [...current, ...entries].sort(compareScheduledPosts));
+      setShowScheduledQueue(true);
+      setQueueMonth(new Date(scheduledDate.getFullYear(), scheduledDate.getMonth(), 1));
+      setSaveNotice(
+        `${entries.length} platform post${entries.length === 1 ? "" : "s"} queued for ${formatScheduledDateTime(scheduledFor, userTimezone)}. Accounts not connected yet.`,
+      );
+    } finally {
+      setIsSchedulingPost(false);
+    }
   };
 
   return (
@@ -597,7 +912,7 @@ export const PostPanel = ({ authToken }: Props) => {
                 <input
                   accept="image/*"
                   onChange={(event) => {
-                    handleImageUpload(event.target.files);
+                    void handleImageUpload(event.target.files);
                     event.currentTarget.value = "";
                   }}
                   type="file"
@@ -766,14 +1081,26 @@ export const PostPanel = ({ authToken }: Props) => {
               <span className="eyebrow">Platform previews</span>
               <h2>Ready queue</h2>
             </div>
-            <button
-              className="post-push-btn"
-              disabled={!selectedPlatforms.length}
-              onClick={handlePush}
-              type="button"
-            >
-              Push
-            </button>
+            <div className="post-schedule-actions">
+              <label className="post-schedule-field">
+                <span>Go live</span>
+                <input
+                  min={minimumScheduleAt}
+                  onChange={(event) => setScheduleAt(event.target.value)}
+                  type="datetime-local"
+                  value={scheduleAt}
+                />
+                <small>{userTimezone}</small>
+              </label>
+              <button
+                className="post-push-btn"
+                disabled={!selectedPlatforms.length || isSchedulingPost}
+                onClick={() => void handlePush()}
+                type="button"
+              >
+                {isSchedulingPost ? "Queuing..." : "Push"}
+              </button>
+            </div>
           </div>
 
           {selectedPlatforms.length ? (
@@ -855,6 +1182,102 @@ export const PostPanel = ({ authToken }: Props) => {
             </div>
           )}
         </section>
+
+        <div className="post-queue-footer">
+          <div>
+            <span className="eyebrow">Scheduled queue</span>
+            <strong>
+              {sortedScheduledPosts.length
+                ? `${sortedScheduledPosts.length} staged platform post${sortedScheduledPosts.length === 1 ? "" : "s"}`
+                : "No scheduled posts yet"}
+            </strong>
+          </div>
+          <button
+            className="post-view-queue-btn"
+            onClick={() => setShowScheduledQueue((current) => !current)}
+            type="button"
+          >
+            {showScheduledQueue ? "Hide queue" : "View queue"}
+          </button>
+        </div>
+
+        {showScheduledQueue ? (
+          <section className="post-calendar-panel" aria-label="Scheduled social post queue">
+            <div className="post-calendar-panel__header">
+              <div>
+                <span className="eyebrow">Calendar</span>
+                <h2>{queueMonthLabel}</h2>
+              </div>
+              <div className="post-calendar-actions">
+                <button onClick={() => shiftQueueMonth(-1)} type="button">
+                  Prev
+                </button>
+                <button onClick={() => setQueueMonth(new Date())} type="button">
+                  Today
+                </button>
+                <button onClick={() => shiftQueueMonth(1)} type="button">
+                  Next
+                </button>
+              </div>
+            </div>
+
+            <div className="post-calendar-grid">
+              {calendarWeekdays.map((weekday) => (
+                <div className="post-calendar-weekday" key={weekday}>
+                  {weekday}
+                </div>
+              ))}
+              {calendarDays.map((day) => (
+                <div
+                  className={[
+                    "post-calendar-day",
+                    day.inCurrentMonth ? "" : "post-calendar-day--muted",
+                    getLocalDateKey(day.date) === getLocalDateKey(new Date())
+                      ? "post-calendar-day--today"
+                      : "",
+                  ]
+                    .filter(Boolean)
+                    .join(" ")}
+                  key={day.key}
+                >
+                  <div className="post-calendar-day__number">{day.date.getDate()}</div>
+                  <div className="post-calendar-day__events">
+                    {day.events.slice(0, 3).map((event) => {
+                      const meta = platformById[event.platform];
+
+                      return (
+                        <article
+                          className="post-calendar-event"
+                          key={event.id}
+                          title={`${meta.label} at ${formatScheduledTime(event.scheduledFor, event.timezone)}`}
+                        >
+                          {event.imageUrl ? (
+                            <img alt={event.imageName ?? `${meta.label} scheduled image`} src={event.imageUrl} />
+                          ) : (
+                            <span className="post-calendar-event__placeholder">
+                              {meta.shortLabel}
+                            </span>
+                          )}
+                          <div>
+                            <span>{meta.label}</span>
+                            <strong>{formatScheduledTime(event.scheduledFor, event.timezone)}</strong>
+                          </div>
+                        </article>
+                      );
+                    })}
+                    {day.events.length > 3 ? (
+                      <span className="post-calendar-more">+{day.events.length - 3} more</span>
+                    ) : null}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <p className="post-calendar-note">
+              Times use {userTimezone}. These posts are queued locally until platform accounts are connected.
+            </p>
+          </section>
+        ) : null}
       </div>
 
       {saveNotice ? (

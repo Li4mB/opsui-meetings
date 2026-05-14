@@ -3348,6 +3348,37 @@ label {
   opacity: 0.55;
 }
 
+.post-schedule-actions {
+  display: flex;
+  align-items: flex-end;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.post-schedule-field {
+  display: grid;
+  gap: 4px;
+  min-width: 230px;
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.post-schedule-field input {
+  min-height: 38px;
+  border-color: rgba(214, 173, 45, 0.24);
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--color-text-primary);
+}
+
+.post-schedule-field small {
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+}
+
 .post-platform-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -3478,6 +3509,206 @@ label {
   border-radius: var(--radius-sm);
   color: var(--color-text-muted);
   font-size: 13px;
+}
+
+.post-queue-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 1rem 1.1rem;
+  border: 1px solid rgba(214, 173, 45, 0.14);
+  border-radius: var(--radius-md);
+  background: linear-gradient(180deg, rgba(21, 21, 19, 0.98), rgba(14, 14, 13, 0.98));
+}
+
+.post-queue-footer strong {
+  display: block;
+  margin-top: 4px;
+  color: var(--color-text-primary);
+  font-family: var(--font-display);
+  font-size: 1.02rem;
+  letter-spacing: 0;
+}
+
+.post-view-queue-btn {
+  min-height: 38px;
+  padding: 0 14px;
+  border: 1px solid rgba(214, 173, 45, 0.3);
+  border-radius: var(--radius-sm);
+  background: rgba(214, 173, 45, 0.1);
+  color: #f8e7a2;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.post-calendar-panel {
+  display: grid;
+  gap: 14px;
+  overflow-x: auto;
+  padding: 1.1rem;
+  border: 1px solid rgba(214, 173, 45, 0.14);
+  border-radius: var(--radius-md);
+  background: linear-gradient(180deg, rgba(18, 18, 16, 0.98), rgba(10, 10, 9, 0.98));
+}
+
+.post-calendar-panel__header,
+.post-calendar-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.post-calendar-panel__header h2 {
+  font-family: var(--font-display);
+  font-size: 1.18rem;
+  letter-spacing: 0;
+}
+
+.post-calendar-actions {
+  justify-content: flex-end;
+}
+
+.post-calendar-actions button {
+  min-height: 34px;
+  padding: 0 11px;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.025);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.post-calendar-actions button:hover,
+.post-view-queue-btn:hover {
+  border-color: rgba(214, 173, 45, 0.42);
+  color: var(--color-text-primary);
+}
+
+.post-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(116px, 1fr));
+  min-width: 812px;
+  overflow: hidden;
+  border: 1px solid var(--color-border-subtle);
+  border-radius: var(--radius-md);
+  background: var(--color-border-subtle);
+  gap: 1px;
+}
+
+.post-calendar-weekday {
+  padding: 9px 10px;
+  background: rgba(214, 173, 45, 0.08);
+  color: #f8e7a2;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.post-calendar-day {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-height: 146px;
+  padding: 8px;
+  background: rgba(11, 11, 10, 0.96);
+}
+
+.post-calendar-day--muted {
+  background: rgba(11, 11, 10, 0.62);
+}
+
+.post-calendar-day--muted .post-calendar-day__number {
+  color: var(--color-text-muted);
+}
+
+.post-calendar-day--today {
+  box-shadow: inset 0 0 0 1px rgba(214, 173, 45, 0.42);
+}
+
+.post-calendar-day__number {
+  color: var(--color-text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.post-calendar-day__events {
+  display: grid;
+  gap: 6px;
+}
+
+.post-calendar-event {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 6px;
+  border: 1px solid rgba(214, 173, 45, 0.18);
+  border-radius: var(--radius-sm);
+  background: rgba(214, 173, 45, 0.075);
+}
+
+.post-calendar-event img,
+.post-calendar-event__placeholder {
+  width: 38px;
+  height: 38px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.045);
+}
+
+.post-calendar-event img {
+  display: block;
+  object-fit: cover;
+}
+
+.post-calendar-event__placeholder {
+  display: grid;
+  place-items: center;
+  color: #f8e7a2;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.post-calendar-event span,
+.post-calendar-event strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.post-calendar-event span {
+  color: var(--color-text-primary);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.post-calendar-event strong {
+  margin-top: 2px;
+  color: var(--color-text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.post-calendar-more {
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.post-calendar-note {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .post-tag-chip {
@@ -5413,9 +5644,23 @@ label {
   .post-section__header,
   .post-preview-panel__header,
   .post-platform-queue__header,
+  .post-calendar-panel__header,
+  .post-queue-footer,
   .post-platform-card__actions {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .post-schedule-actions,
+  .post-calendar-actions {
+    justify-content: stretch;
+    width: 100%;
+  }
+
+  .post-schedule-field,
+  .post-push-btn,
+  .post-view-queue-btn {
+    width: 100%;
   }
 
   .post-platform-selector {
