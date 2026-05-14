@@ -548,6 +548,13 @@ export const PostPanel = ({ authToken }: Props) => {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [isScheduleModalOpen]);
 
+  useEffect(() => {
+    const handleOpenPostCalendar = () => setShowScheduledQueue(true);
+
+    window.addEventListener("opsui:open-post-calendar", handleOpenPostCalendar);
+    return () => window.removeEventListener("opsui:open-post-calendar", handleOpenPostCalendar);
+  }, []);
+
   const replaceImage = (image: PostImage | null) => {
     setPostImage((current) => {
       revokePostImage(current);
@@ -1202,33 +1209,28 @@ export const PostPanel = ({ authToken }: Props) => {
             </div>
           )}
         </section>
+      </div>
 
-        <div className="post-queue-footer">
-          <div>
-            <span className="eyebrow">Scheduled queue</span>
-            <strong>
-              {isScheduledQueueLoading
-                ? "Loading shared queue..."
-                : sortedScheduledPosts.length
-                ? `${sortedScheduledPosts.length} scheduled platform post${sortedScheduledPosts.length === 1 ? "" : "s"}`
-                : "No scheduled posts yet"}
-            </strong>
-          </div>
-          <button
-            className="post-view-queue-btn"
-            onClick={() => setShowScheduledQueue((current) => !current)}
-            type="button"
-          >
-            {showScheduledQueue ? "Hide queue" : "View queue"}
-          </button>
-        </div>
-
-        {showScheduledQueue ? (
-          <section className="post-calendar-panel" aria-label="Scheduled social post queue">
+      {showScheduledQueue ? (
+        <div
+          className="post-calendar-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="post-calendar-title"
+        >
+          <div className="post-schedule-modal__backdrop" onClick={() => setShowScheduledQueue(false)} />
+          <section className="post-calendar-dialog" aria-label="Scheduled social post queue">
             <div className="post-calendar-panel__header">
               <div>
-                <span className="eyebrow">Calendar</span>
-                <h2>{queueMonthLabel}</h2>
+                <span className="eyebrow">Scheduled queue</span>
+                <h2 id="post-calendar-title">{queueMonthLabel}</h2>
+                <p>
+                  {isScheduledQueueLoading
+                    ? "Loading shared queue..."
+                    : sortedScheduledPosts.length
+                    ? `${sortedScheduledPosts.length} scheduled platform post${sortedScheduledPosts.length === 1 ? "" : "s"}`
+                    : "No scheduled posts yet"}
+                </p>
               </div>
               <div className="post-calendar-actions">
                 <button onClick={() => shiftQueueMonth(-1)} type="button">
@@ -1239,6 +1241,14 @@ export const PostPanel = ({ authToken }: Props) => {
                 </button>
                 <button onClick={() => shiftQueueMonth(1)} type="button">
                   Next
+                </button>
+                <button
+                  className="post-calendar-close-btn"
+                  onClick={() => setShowScheduledQueue(false)}
+                  type="button"
+                  aria-label="Close post calendar"
+                >
+                  x
                 </button>
               </div>
             </div>
@@ -1300,8 +1310,8 @@ export const PostPanel = ({ authToken }: Props) => {
               Times use {userTimezone}. The queue is shared with every OpsUI member.
             </p>
           </section>
-        ) : null}
-      </div>
+        </div>
+      ) : null}
 
       {isScheduleModalOpen ? (
         <div

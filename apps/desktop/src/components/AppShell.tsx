@@ -413,6 +413,18 @@ export const AppShell = ({
                   <div>{syncMessage ?? "Push is staged until social accounts are connected."}</div>
                 </div>
               </section>
+
+              <section className="sidebar-panel sidebar-panel--post-schedule">
+                <div className="sidebar-section__label">Post schedule</div>
+                <button
+                  className="sidebar-post-calendar-btn"
+                  onClick={() => window.dispatchEvent(new CustomEvent("opsui:open-post-calendar"))}
+                  type="button"
+                >
+                  <span>Calendar</span>
+                  <strong>Open post schedule</strong>
+                </button>
+              </section>
             </>
           ) : activeSurfaceMode === "admin" ? (
             <>
