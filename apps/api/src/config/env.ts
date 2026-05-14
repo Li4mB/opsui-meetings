@@ -95,10 +95,14 @@ export const env = {
     process.env.OPSUI_GOOGLE_DRIVE_BRIEFS_FOLDER_ID ?? "",
   openAiApiKey: process.env.OPENAI_API_KEY ?? "",
   openAiModel: process.env.OPSUI_OPENAI_MODEL ?? "gpt-5.2",
-  openAiImageModel: process.env.OPSUI_OPENAI_IMAGE_MODEL ?? "gpt-image-1",
+  openAiCaptionModel: process.env.OPSUI_OPENAI_CAPTION_MODEL ?? "gpt-4o",
+  openAiImageReasoningModel:
+    process.env.OPSUI_OPENAI_IMAGE_REASONING_MODEL ?? "gpt-5.4",
+  openAiImageModel: process.env.OPSUI_OPENAI_IMAGE_MODEL ?? "gpt-image-1.5",
   openAiVectorStoreId: process.env.OPSUI_OPENAI_VECTOR_STORE_ID ?? "",
   makeMeetingRequestWebhookUrl:
     process.env.OPSUI_MAKE_MEETING_REQUEST_WEBHOOK_URL ?? "",
+  socialPublishWebhookUrl: process.env.OPSUI_SOCIAL_PUBLISH_WEBHOOK_URL ?? "",
   dbProvider,
   dbUrl,
   dbSsl: parseBoolean(process.env.OPSUI_DB_SSL, dbProvider === "postgres"),

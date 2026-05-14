@@ -12,6 +12,7 @@ import type {
   DbMeetingFilters,
   DbMeetingWithAssignmentRow,
   DbPastMeetingWithAssignmentRow,
+  DbScheduledSocialPostWithCreatorRow,
   ReplaceMeetingsResult,
   StorageAdapter,
 } from "./adapter.js";
@@ -23,6 +24,7 @@ const pastMeetingsTable = `${schemaName}.past_meetings`;
 const syncStateTable = `${schemaName}.sync_state`;
 const aiMeetingGuidesTable = `${schemaName}.ai_meeting_guides`;
 const meetingRequestsTable = `${schemaName}.meeting_requests`;
+const scheduledSocialPostsTable = `${schemaName}.scheduled_social_posts`;
 
 const schemaSql = `
   CREATE SCHEMA IF NOT EXISTS ${schemaName};
@@ -117,6 +119,27 @@ const schemaSql = `
     created_by_user_id TEXT NOT NULL,
     created_at TEXT NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS ${scheduledSocialPostsTable} (
+    id TEXT PRIMARY KEY,
+    platform TEXT NOT NULL CHECK(platform IN ('facebook', 'linkedin', 'twitter', 'instagram')),
+    caption TEXT NOT NULL,
+    image_data_url TEXT,
+    image_name TEXT,
+    thumbnail_data_url TEXT,
+    scheduled_for TEXT NOT NULL,
+    timezone TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('scheduled', 'publishing', 'published', 'failed', 'connection_required', 'cancelled')),
+    status_message TEXT,
+    external_post_id TEXT,
+    published_at TEXT,
+    created_by_user_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_scheduled_social_posts_due
+    ON ${scheduledSocialPostsTable}(status, scheduled_for);
 `;
 
 const selectActiveMeetingsQuery = `
@@ -135,6 +158,14 @@ const selectPastMeetingsQuery = `
     users.color_hex AS assigned_user_color
   FROM ${pastMeetingsTable} AS past_meetings
   LEFT JOIN ${usersTable} AS users ON users.id = past_meetings.assigned_user_id
+`;
+
+const selectScheduledSocialPostsQuery = `
+  SELECT
+    scheduled_social_posts.*,
+    users.display_name AS created_by_user_name
+  FROM ${scheduledSocialPostsTable} AS scheduled_social_posts
+  LEFT JOIN ${usersTable} AS users ON users.id = scheduled_social_posts.created_by_user_id
 `;
 
 const buildWhereClause = (
@@ -703,6 +734,101 @@ export const createPostgresAdapter = (): StorageAdapter => {
 
     async deleteMeetingRequestById(id) {
       await execute(`DELETE FROM ${meetingRequestsTable} WHERE id = $1`, [id]);
+    },
+
+    async insertScheduledSocialPosts(rows) {
+      await withTransaction(async (client) => {
+        for (const row of rows) {
+          await execute(
+            `
+              INSERT INTO ${scheduledSocialPostsTable} (
+                id,
+                platform,
+                caption,
+                image_data_url,
+                image_name,
+                thumbnail_data_url,
+                scheduled_for,
+                timezone,
+                status,
+                status_message,
+                external_post_id,
+                published_at,
+                created_by_user_id,
+                created_at,
+                updated_at
+              ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7, $8,
+                $9, $10, $11, $12, $13, $14, $15
+              )
+            `,
+            [
+              row.id,
+              row.platform,
+              row.caption,
+              row.image_data_url,
+              row.image_name,
+              row.thumbnail_data_url,
+              row.scheduled_for,
+              row.timezone,
+              row.status,
+              row.status_message,
+              row.external_post_id,
+              row.published_at,
+              row.created_by_user_id,
+              row.created_at,
+              row.updated_at,
+            ],
+            client,
+          );
+        }
+      });
+    },
+
+    async listScheduledSocialPosts() {
+      return queryRows<DbScheduledSocialPostWithCreatorRow>(
+        `${selectScheduledSocialPostsQuery}
+         ORDER BY scheduled_social_posts.scheduled_for ASC, scheduled_social_posts.created_at ASC`,
+      );
+    },
+
+    async listDueScheduledSocialPosts(nowIso, limit) {
+      return queryRows<DbScheduledSocialPostWithCreatorRow>(
+        `${selectScheduledSocialPostsQuery}
+         WHERE scheduled_social_posts.status = 'scheduled'
+           AND scheduled_social_posts.scheduled_for <= $1
+         ORDER BY scheduled_social_posts.scheduled_for ASC
+         LIMIT $2`,
+        [nowIso, limit],
+      );
+    },
+
+    async updateScheduledSocialPostStatus(id, status, patch = {}) {
+      await execute(
+        `
+          UPDATE ${scheduledSocialPostsTable}
+          SET
+            status = $1,
+            status_message = $2,
+            external_post_id = COALESCE($3, external_post_id),
+            published_at = $4,
+            updated_at = $5
+          WHERE id = $6
+        `,
+        [
+          status,
+          patch.statusMessage ?? null,
+          patch.externalPostId ?? null,
+          patch.publishedAt ?? null,
+          new Date().toISOString(),
+          id,
+        ],
+      );
+
+      return queryRow<DbScheduledSocialPostWithCreatorRow>(
+        `${selectScheduledSocialPostsQuery} WHERE scheduled_social_posts.id = $1 LIMIT 1`,
+        [id],
+      );
     },
   };
 };

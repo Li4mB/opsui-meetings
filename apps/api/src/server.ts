@@ -8,6 +8,10 @@ import { registerAuthRoutes } from "./modules/auth.js";
 import { registerAiRoutes } from "./modules/ai.js";
 import { registerMeetingRoutes } from "./modules/meetings.js";
 import { registerMeetingRequestRoutes } from "./modules/meeting-requests.js";
+import {
+  registerSocialPostRoutes,
+  startSocialPostScheduler,
+} from "./modules/social-posts.js";
 import { registerUserRoutes } from "./modules/users.js";
 import { initializeDatabase, seedAdminIfMissing } from "./db/database.js";
 
@@ -46,6 +50,8 @@ const buildServer = async () => {
   registerMeetingRequestRoutes(app);
   registerUserRoutes(app);
   registerMeetingRoutes(app);
+  registerSocialPostRoutes(app);
+  startSocialPostScheduler(app);
 
   app.setErrorHandler((error: unknown, _request, reply) => {
     const appError =

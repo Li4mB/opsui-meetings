@@ -40,16 +40,29 @@ export const aiMeetingGuideBindingSchema = z.object({
   locked: z.boolean(),
 });
 
+export const socialPlatformSchema = z.enum([
+  "general",
+  "facebook",
+  "linkedin",
+  "twitter",
+  "instagram",
+]);
+
 export const aiPostContentRequestSchema = z.object({
   prompt: z.string().min(1).max(8000),
-  currentCaption: z.string().max(2200).optional(),
+  platform: socialPlatformSchema.default("general"),
+  currentCaption: z.string().max(4000).optional(),
+  tweakInstruction: z.string().max(2000).optional(),
   imageNames: z.array(z.string()).max(6).default([]),
   tags: z.array(z.string()).max(12).default([]),
 });
 
 export const aiPostContentSchema = z.object({
-  caption: z.string().min(1).max(2200),
-  tags: z.array(z.string()).min(1).max(12),
+  caption: z.string().min(1).max(4000),
+  alternatives: z.array(z.string().min(1).max(4000)).min(3).max(3),
+  hashtagBank: z.array(z.string().min(1).max(64)).min(1).max(24),
+  postingStyleRecommendation: z.string().min(1).max(1200),
+  ctaOptions: z.array(z.string().min(1).max(220)).min(1).max(8),
   generatedAt: z.string(),
   model: z.string(),
 });

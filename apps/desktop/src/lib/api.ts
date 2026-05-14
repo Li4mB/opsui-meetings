@@ -15,6 +15,8 @@ import {
   meetingRequestSchema,
   meetingsResponseSchema,
   meetingSchema,
+  scheduledSocialPostsResponseSchema,
+  scheduleSocialPostsInputSchema,
   type LoginInput,
   sessionSchema,
   syncResponseSchema,
@@ -259,6 +261,30 @@ export const generatePostImage = (
       body: JSON.stringify(aiPostImageRequestSchema.parse(input)),
     },
     aiPostImageSchema,
+  );
+
+export const getScheduledSocialPosts = (token: string) =>
+  request(
+    "/social-posts",
+    {
+      method: "GET",
+      headers: withToken(token),
+    },
+    scheduledSocialPostsResponseSchema,
+  );
+
+export const scheduleSocialPosts = (
+  token: string,
+  input: z.infer<typeof scheduleSocialPostsInputSchema>,
+) =>
+  request(
+    "/social-posts/schedule",
+    {
+      method: "POST",
+      headers: withToken(token),
+      body: JSON.stringify(scheduleSocialPostsInputSchema.parse(input)),
+    },
+    scheduledSocialPostsResponseSchema,
   );
 
 export const unlockMeetingGuide = (token: string, meetingId: string) =>

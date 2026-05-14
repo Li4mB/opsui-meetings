@@ -71,6 +71,32 @@ export type DbMeetingRequestRow = {
   created_at: string;
 };
 
+export type DbScheduledSocialPostStatus =
+  | "scheduled"
+  | "publishing"
+  | "published"
+  | "failed"
+  | "connection_required"
+  | "cancelled";
+
+export type DbScheduledSocialPostRow = {
+  id: string;
+  platform: "facebook" | "linkedin" | "twitter" | "instagram";
+  caption: string;
+  image_data_url: string | null;
+  image_name: string | null;
+  thumbnail_data_url: string | null;
+  scheduled_for: string;
+  timezone: string;
+  status: DbScheduledSocialPostStatus;
+  status_message: string | null;
+  external_post_id: string | null;
+  published_at: string | null;
+  created_by_user_id: string;
+  created_at: string;
+  updated_at: string;
+};
+
 export type CalendarMeeting = {
   googleEventId: string;
   title: string;

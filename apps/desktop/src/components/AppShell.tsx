@@ -228,8 +228,8 @@ export const AppShell = ({
             </span>
             <span className="app-logo__text">
               <span className="app-logo__primary">OpsUI</span>
-              <span className="app-logo__stack" aria-label="Meetings Dashboard">
-                <span className="app-logo__sub">Meetings</span>
+              <span className="app-logo__stack" aria-label="Admin Dashboard">
+                <span className="app-logo__sub">Admin</span>
                 <span className="app-logo__sub">Dashboard</span>
               </span>
             </span>
@@ -398,19 +398,19 @@ export const AppShell = ({
             <>
               <section className="sidebar-panel">
                 <div className="sidebar-section__label">Post workspace</div>
-                <div className="sidebar-panel__title">Create Content</div>
+                <div className="sidebar-panel__title">Social publisher</div>
                 <div className="sidebar-meta">
-                  Draft captions, attach image assets, and keep tags visible before the
-                  post is shared.
+                  Build one caption and one visual, then stage channel previews before
+                  any account connection is added.
                 </div>
               </section>
 
               <section className="sidebar-panel">
                 <div className="sidebar-section__label">Preview flow</div>
                 <div className="sidebar-meta">
-                  <div>Use the left side to build the content.</div>
-                  <div>The live preview updates as captions, images, and tags change.</div>
-                  <div>{syncMessage ?? "Review the full post before publishing."}</div>
+                  <div>Use the two prompt boxes to generate the post.</div>
+                  <div>Select channels to create platform previews.</div>
+                  <div>{syncMessage ?? "Push is staged until social accounts are connected."}</div>
                 </div>
               </section>
             </>

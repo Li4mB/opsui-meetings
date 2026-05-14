@@ -9,12 +9,14 @@ import type {
   DbAiMeetingGuideRow,
   DbMeetingRequestRow,
   DbMeetingRow,
+  DbScheduledSocialPostRow,
   DbUserRow,
 } from "../types.js";
 import type {
   DbMeetingFilters,
   DbMeetingWithAssignmentRow,
   DbPastMeetingWithAssignmentRow,
+  DbScheduledSocialPostWithCreatorRow,
   ReplaceMeetingsResult,
   StorageAdapter,
 } from "./adapter.js";
@@ -118,6 +120,28 @@ const schemaSql = `
     created_at TEXT NOT NULL,
     FOREIGN KEY (created_by_user_id) REFERENCES users(id)
   );
+
+  CREATE TABLE IF NOT EXISTS scheduled_social_posts (
+    id TEXT PRIMARY KEY,
+    platform TEXT NOT NULL CHECK(platform IN ('facebook', 'linkedin', 'twitter', 'instagram')),
+    caption TEXT NOT NULL,
+    image_data_url TEXT,
+    image_name TEXT,
+    thumbnail_data_url TEXT,
+    scheduled_for TEXT NOT NULL,
+    timezone TEXT NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('scheduled', 'publishing', 'published', 'failed', 'connection_required', 'cancelled')),
+    status_message TEXT,
+    external_post_id TEXT,
+    published_at TEXT,
+    created_by_user_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (created_by_user_id) REFERENCES users(id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_scheduled_social_posts_due
+    ON scheduled_social_posts(status, scheduled_for);
 `;
 
 const selectActiveMeetingsQuery = `
@@ -136,6 +160,14 @@ const selectPastMeetingsQuery = `
     users.color_hex AS assigned_user_color
   FROM past_meetings
   LEFT JOIN users ON users.id = past_meetings.assigned_user_id
+`;
+
+const selectScheduledSocialPostsQuery = `
+  SELECT
+    scheduled_social_posts.*,
+    users.display_name AS created_by_user_name
+  FROM scheduled_social_posts
+  LEFT JOIN users ON users.id = scheduled_social_posts.created_by_user_id
 `;
 
 const buildWhereClause = (tableName: "meetings" | "past_meetings", filters: DbMeetingFilters) => {
@@ -682,6 +714,103 @@ export const createSqliteAdapter = (): StorageAdapter => {
     async deleteMeetingRequestById(id) {
       const database = getDb();
       database.prepare("DELETE FROM meeting_requests WHERE id = ?").run(id);
+    },
+
+    async insertScheduledSocialPosts(rows) {
+      const database = getDb();
+      const insert = database.prepare(`
+        INSERT INTO scheduled_social_posts (
+          id,
+          platform,
+          caption,
+          image_data_url,
+          image_name,
+          thumbnail_data_url,
+          scheduled_for,
+          timezone,
+          status,
+          status_message,
+          external_post_id,
+          published_at,
+          created_by_user_id,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      const transaction = database.transaction((items: DbScheduledSocialPostRow[]) => {
+        for (const row of items) {
+          insert.run(
+            row.id,
+            row.platform,
+            row.caption,
+            row.image_data_url,
+            row.image_name,
+            row.thumbnail_data_url,
+            row.scheduled_for,
+            row.timezone,
+            row.status,
+            row.status_message,
+            row.external_post_id,
+            row.published_at,
+            row.created_by_user_id,
+            row.created_at,
+            row.updated_at,
+          );
+        }
+      });
+
+      transaction(rows);
+    },
+
+    async listScheduledSocialPosts() {
+      const database = getDb();
+      return database
+        .prepare<unknown[], DbScheduledSocialPostWithCreatorRow>(
+          `${selectScheduledSocialPostsQuery} ORDER BY scheduled_social_posts.scheduled_for ASC, scheduled_social_posts.created_at ASC`,
+        )
+        .all();
+    },
+
+    async listDueScheduledSocialPosts(nowIso, limit) {
+      const database = getDb();
+      return database
+        .prepare<unknown[], DbScheduledSocialPostWithCreatorRow>(
+          `${selectScheduledSocialPostsQuery}
+           WHERE scheduled_social_posts.status = 'scheduled'
+             AND scheduled_social_posts.scheduled_for <= ?
+           ORDER BY scheduled_social_posts.scheduled_for ASC
+           LIMIT ?`,
+        )
+        .all(nowIso, limit);
+    },
+
+    async updateScheduledSocialPostStatus(id, status, patch = {}) {
+      const database = getDb();
+      database.prepare(`
+        UPDATE scheduled_social_posts
+        SET
+          status = ?,
+          status_message = ?,
+          external_post_id = COALESCE(?, external_post_id),
+          published_at = ?,
+          updated_at = ?
+        WHERE id = ?
+      `).run(
+        status,
+        patch.statusMessage ?? null,
+        patch.externalPostId ?? null,
+        patch.publishedAt ?? null,
+        new Date().toISOString(),
+        id,
+      );
+
+      return (
+        database
+          .prepare<unknown[], DbScheduledSocialPostWithCreatorRow>(
+            `${selectScheduledSocialPostsQuery} WHERE scheduled_social_posts.id = ? LIMIT 1`,
+          )
+          .get(id) ?? null
+      );
     },
   };
 };
