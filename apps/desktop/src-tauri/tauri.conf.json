@@ -1,6 +1,6 @@
 {
   "$schema": "../../../node_modules/@tauri-apps/cli/config.schema.json",
-  "productName": "Opsui Admin Dashboard",
+  "productName": "OpsUI Meetings Dashboard",
   "version": "0.1.2",
   "identifier": "com.opsui.meetings",
   "build": {

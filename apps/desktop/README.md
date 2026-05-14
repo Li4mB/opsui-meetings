@@ -35,6 +35,10 @@ npm run dev:desktop:tauri
 
 ## Desktop builds
 
+`src-tauri/tauri.conf.json` keeps the Windows installer identity as
+`OpsUI Meetings Dashboard` so existing installed apps update in-place. The
+visible app title and UI remain `Opsui Admin Dashboard`.
+
 The desktop release build expects the Tauri updater signing key:
 
 ```sh
