@@ -3692,10 +3692,10 @@ label {
 .post-calendar-day {
   display: grid;
   align-content: start;
-  gap: 8px;
+  gap: 6px;
   min-height: 176px;
-  padding: 8px;
-  overflow: visible;
+  padding: 7px;
+  overflow: hidden;
   background: rgba(11, 11, 10, 0.96);
 }
 
@@ -3725,22 +3725,23 @@ label {
 
 .post-calendar-day__events {
   display: grid;
-  gap: 6px;
+  gap: 5px;
   min-width: 0;
   max-width: 100%;
-  overflow: visible;
+  overflow: hidden;
 }
 
 .post-calendar-event {
   box-sizing: border-box;
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
+  grid-template-columns: 30px minmax(0, 1fr);
   align-items: center;
-  gap: 7px;
+  gap: 6px;
   width: 100%;
   min-width: 0;
   max-width: 100%;
-  padding: 6px;
+  padding: 5px;
+  overflow: hidden;
   border: 1px solid rgba(214, 173, 45, 0.18);
   border-radius: var(--radius-sm);
   background: rgba(214, 173, 45, 0.075);
@@ -3768,8 +3769,8 @@ label {
 
 .post-calendar-event img,
 .post-calendar-event__placeholder {
-  width: 34px;
-  height: 34px;
+  width: 30px;
+  height: 30px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 6px;
   background: rgba(255, 255, 255, 0.045);
@@ -3848,15 +3849,15 @@ label {
 .post-calendar-event__controls {
   grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  gap: 5px;
+  grid-template-columns: minmax(0, 1fr) minmax(58px, auto);
+  gap: 4px;
   min-width: 0;
   max-width: 100%;
 }
 
 .post-calendar-event__controls input,
 .post-calendar-event__controls button {
-  min-height: 28px;
+  min-height: 24px;
   box-sizing: border-box;
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 6px;
@@ -3869,16 +3870,12 @@ label {
 .post-calendar-event__controls input {
   width: 100%;
   min-width: 0;
-  padding: 0 6px;
-}
-
-.post-calendar-event__controls input[type="date"] {
-  grid-column: 1 / -1;
+  padding: 0 5px;
 }
 
 .post-calendar-event__controls button {
   width: 100%;
-  padding: 0 6px;
+  padding: 0 5px;
 }
 
 .post-calendar-event__controls input:focus,

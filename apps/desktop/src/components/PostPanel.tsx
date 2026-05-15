@@ -280,9 +280,6 @@ const padDatePart = (value: number) => value.toString().padStart(2, "0");
 const formatDateTimeLocalValue = (date: Date) =>
   `${date.getFullYear()}-${padDatePart(date.getMonth() + 1)}-${padDatePart(date.getDate())}T${padDatePart(date.getHours())}:${padDatePart(date.getMinutes())}`;
 
-const formatDateInputValue = (date: Date) =>
-  `${date.getFullYear()}-${padDatePart(date.getMonth() + 1)}-${padDatePart(date.getDate())}`;
-
 const formatTimeInputValue = (date: Date) =>
   `${padDatePart(date.getHours())}:${padDatePart(date.getMinutes())}`;
 
@@ -1523,23 +1520,6 @@ export const PostPanel = ({ authToken }: Props) => {
                             <small>{event.status.replace(/_/g, " ")}</small>
                           </div>
                           <div className="post-calendar-event__controls">
-                            <input
-                              aria-label={`Move ${meta.label} post date`}
-                              disabled={!canEditScheduledPost(event) || updatingScheduledPostIds.includes(event.id)}
-                              min={formatDateInputValue(new Date())}
-                              onChange={(changeEvent) => {
-                                const nextDate = mergeDateWithPostTime(
-                                  new Date(`${changeEvent.target.value}T00:00`),
-                                  event,
-                                );
-
-                                if (!Number.isNaN(nextDate.getTime())) {
-                                  void handleReschedulePost(event, nextDate);
-                                }
-                              }}
-                              type="date"
-                              value={formatDateInputValue(new Date(event.scheduledFor))}
-                            />
                             <input
                               aria-label={`Move ${meta.label} post time`}
                               disabled={!canEditScheduledPost(event) || updatingScheduledPostIds.includes(event.id)}
