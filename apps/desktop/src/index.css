@@ -3808,25 +3808,6 @@ label {
   font-weight: 800;
 }
 
-.post-calendar-event__drag-hint {
-  display: inline-grid !important;
-  place-items: center;
-  width: max-content;
-  margin-left: 6px;
-  padding: 1px 5px;
-  border: 1px solid rgba(214, 173, 45, 0.24);
-  border-radius: 999px;
-  color: #f8e7a2 !important;
-  font-size: 8px !important;
-  line-height: 1.3;
-  text-transform: uppercase;
-  vertical-align: 1px;
-}
-
-.post-calendar-event--editable:hover .post-calendar-event__drag-hint {
-  border-color: rgba(214, 173, 45, 0.52);
-}
-
 .post-calendar-event strong {
   margin-top: 2px;
   color: var(--color-text-muted);
@@ -3901,35 +3882,13 @@ label {
   top: 0;
   left: 0;
   z-index: 240;
-  width: 150px;
+  width: 146px;
   max-width: calc(100vw - 24px);
-  padding: 9px 10px;
-  border: 1px solid rgba(214, 173, 45, 0.56);
-  border-radius: var(--radius-sm);
+  border-color: rgba(214, 173, 45, 0.56);
   background: rgba(24, 20, 8, 0.94);
   box-shadow: 0 14px 34px rgba(0, 0, 0, 0.42);
-  color: var(--color-text-primary);
   pointer-events: none;
-}
-
-.post-calendar-drag-ghost span,
-.post-calendar-drag-ghost strong {
-  display: block;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.post-calendar-drag-ghost span {
-  font-size: 11px;
-  font-weight: 900;
-}
-
-.post-calendar-drag-ghost strong {
-  margin-top: 2px;
-  color: #f8e7a2;
-  font-family: var(--font-mono);
-  font-size: 10px;
+  opacity: 0.96;
 }
 
 .post-calendar-note {

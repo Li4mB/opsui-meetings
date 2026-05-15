@@ -930,6 +930,7 @@ export const PostPanel = ({ authToken }: Props) => {
     setDraggedScheduledPostId(post.id);
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData("text/plain", post.id);
+    event.dataTransfer.setDragImage(event.currentTarget, 12, 12);
   };
 
   const handleCalendarDayDrop = (event: DragEvent<HTMLDivElement>, date: Date) => {
@@ -1510,12 +1511,7 @@ export const PostPanel = ({ authToken }: Props) => {
                             </span>
                           )}
                           <div className="post-calendar-event__details">
-                            <span>
-                              {meta.label}
-                              {canEditScheduledPost(event) ? (
-                                <span className="post-calendar-event__drag-hint">Drag</span>
-                              ) : null}
-                            </span>
+                            <span>{meta.label}</span>
                             <strong>{formatScheduledTime(event.scheduledFor, event.timezone)}</strong>
                             <small>{event.status.replace(/_/g, " ")}</small>
                           </div>
@@ -1552,17 +1548,46 @@ export const PostPanel = ({ authToken }: Props) => {
               ))}
             </div>
 
-            {draggedScheduledPost && scheduledDragPoint ? (
-              <div
-                className="post-calendar-drag-ghost"
-                style={{
-                  transform: `translate(${scheduledDragPoint.x + 12}px, ${scheduledDragPoint.y + 12}px)`,
-                }}
-              >
-                <span>{platformById[draggedScheduledPost.platform].label}</span>
-                <strong>{formatScheduledTime(draggedScheduledPost.scheduledFor, draggedScheduledPost.timezone)}</strong>
-              </div>
-            ) : null}
+            {draggedScheduledPost && scheduledDragPoint
+              ? (() => {
+                  const meta = platformById[draggedScheduledPost.platform];
+
+                  return (
+                    <article
+                      className="post-calendar-drag-ghost post-calendar-event"
+                      style={{
+                        transform: `translate(${scheduledDragPoint.x + 12}px, ${scheduledDragPoint.y + 12}px)`,
+                      }}
+                    >
+                      {draggedScheduledPost.thumbnailDataUrl ? (
+                        <img
+                          alt={draggedScheduledPost.imageName ?? `${meta.label} scheduled image`}
+                          draggable={false}
+                          src={draggedScheduledPost.thumbnailDataUrl}
+                        />
+                      ) : (
+                        <span className="post-calendar-event__placeholder">{meta.shortLabel}</span>
+                      )}
+                      <div className="post-calendar-event__details">
+                        <span>{meta.label}</span>
+                        <strong>{formatScheduledTime(draggedScheduledPost.scheduledFor, draggedScheduledPost.timezone)}</strong>
+                        <small>{draggedScheduledPost.status.replace(/_/g, " ")}</small>
+                      </div>
+                      <div className="post-calendar-event__controls" aria-hidden="true">
+                        <input
+                          readOnly
+                          tabIndex={-1}
+                          type="time"
+                          value={formatTimeInputValue(new Date(draggedScheduledPost.scheduledFor))}
+                        />
+                        <button tabIndex={-1} type="button">
+                          Remove
+                        </button>
+                      </div>
+                    </article>
+                  );
+                })()
+              : null}
 
             <p className="post-calendar-note">
               Times use {userTimezone}. The queue is shared with every OpsUI member.
