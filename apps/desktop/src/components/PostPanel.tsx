@@ -469,6 +469,7 @@ export const PostPanel = ({ authToken }: Props) => {
   const [showScheduledQueue, setShowScheduledQueue] = useState(false);
   const [queueMonth, setQueueMonth] = useState(() => new Date());
   const [draggedScheduledPostId, setDraggedScheduledPostId] = useState<string | null>(null);
+  const [scheduledDragPoint, setScheduledDragPoint] = useState<{ x: number; y: number } | null>(null);
   const [updatingScheduledPostIds, setUpdatingScheduledPostIds] = useState<string[]>([]);
   const masterCaptionInputRef = useRef<HTMLTextAreaElement | null>(null);
   const postImageRef = useRef<PostImage | null>(null);
@@ -498,6 +499,13 @@ export const PostPanel = ({ authToken }: Props) => {
   const calendarDays = useMemo(
     () => buildCalendarDays(queueMonth, sortedScheduledPosts),
     [queueMonth, sortedScheduledPosts],
+  );
+  const draggedScheduledPost = useMemo(
+    () =>
+      draggedScheduledPostId
+        ? scheduledPosts.find((post) => post.id === draggedScheduledPostId) ?? null
+        : null,
+    [draggedScheduledPostId, scheduledPosts],
   );
   const queueMonthLabel = useMemo(
     () =>
@@ -592,6 +600,41 @@ export const PostPanel = ({ authToken }: Props) => {
     window.addEventListener("opsui:open-post-calendar", handleOpenPostCalendar);
     return () => window.removeEventListener("opsui:open-post-calendar", handleOpenPostCalendar);
   }, []);
+
+  useEffect(() => {
+    if (!draggedScheduledPostId) {
+      return undefined;
+    }
+
+    const handlePointerMove = (event: globalThis.PointerEvent) => {
+      setScheduledDragPoint({ x: event.clientX, y: event.clientY });
+    };
+
+    const handlePointerUp = (event: globalThis.PointerEvent) => {
+      const post = scheduledPosts.find((item) => item.id === draggedScheduledPostId);
+      const dropTarget = document
+        .elementFromPoint(event.clientX, event.clientY)
+        ?.closest<HTMLElement>("[data-post-calendar-day]");
+      const day = calendarDays.find((item) => item.key === dropTarget?.dataset.postCalendarDay);
+
+      setDraggedScheduledPostId(null);
+      setScheduledDragPoint(null);
+
+      if (!post || !day || getLocalDateKey(new Date(post.scheduledFor)) === day.key) {
+        return;
+      }
+
+      void handleReschedulePost(post, mergeDateWithPostTime(day.date, post));
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+  }, [calendarDays, draggedScheduledPostId, scheduledPosts]);
 
   const replaceImage = (image: PostImage | null) => {
     setPostImage((current) => {
@@ -899,6 +942,7 @@ export const PostPanel = ({ authToken }: Props) => {
     const post = scheduledPosts.find((item) => item.id === postId);
 
     setDraggedScheduledPostId(null);
+    setScheduledDragPoint(null);
 
     if (!post) {
       return;
@@ -921,22 +965,8 @@ export const PostPanel = ({ authToken }: Props) => {
 
     event.preventDefault();
     setDraggedScheduledPostId(post.id);
-  };
-
-  const handleCalendarDayPointerUp = (date: Date) => {
-    if (!draggedScheduledPostId) {
-      return;
-    }
-
-    const post = scheduledPosts.find((item) => item.id === draggedScheduledPostId);
-
-    setDraggedScheduledPostId(null);
-
-    if (!post || getLocalDateKey(new Date(post.scheduledFor)) === getLocalDateKey(date)) {
-      return;
-    }
-
-    void handleReschedulePost(post, mergeDateWithPostTime(date, post));
+    setScheduledDragPoint({ x: event.clientX, y: event.clientY });
+    event.currentTarget.setPointerCapture(event.pointerId);
   };
 
   const validateScheduleContent = () => {
@@ -1446,7 +1476,7 @@ export const PostPanel = ({ authToken }: Props) => {
                     event.dataTransfer.dropEffect = "move";
                   }}
                   onDrop={(event) => handleCalendarDayDrop(event, day.date)}
-                  onPointerUp={() => handleCalendarDayPointerUp(day.date)}
+                  data-post-calendar-day={day.key}
                   key={day.key}
                 >
                   <div className="post-calendar-day__number">{day.date.getDate()}</div>
@@ -1541,6 +1571,18 @@ export const PostPanel = ({ authToken }: Props) => {
                 </div>
               ))}
             </div>
+
+            {draggedScheduledPost && scheduledDragPoint ? (
+              <div
+                className="post-calendar-drag-ghost"
+                style={{
+                  transform: `translate(${scheduledDragPoint.x + 12}px, ${scheduledDragPoint.y + 12}px)`,
+                }}
+              >
+                <span>{platformById[draggedScheduledPost.platform].label}</span>
+                <strong>{formatScheduledTime(draggedScheduledPost.scheduledFor, draggedScheduledPost.timezone)}</strong>
+              </div>
+            ) : null}
 
             <p className="post-calendar-note">
               Times use {userTimezone}. The queue is shared with every OpsUI member.

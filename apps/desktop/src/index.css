@@ -3667,7 +3667,7 @@ label {
 .post-calendar-grid {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
-  grid-template-rows: auto repeat(6, minmax(150px, max-content));
+  grid-template-rows: auto repeat(6, minmax(176px, max-content));
   min-width: 0;
   min-height: 0;
   overflow: auto;
@@ -3693,7 +3693,7 @@ label {
   display: grid;
   align-content: start;
   gap: 8px;
-  min-height: 150px;
+  min-height: 176px;
   padding: 8px;
   overflow: visible;
   background: rgba(11, 11, 10, 0.96);
@@ -3727,15 +3727,19 @@ label {
   display: grid;
   gap: 6px;
   min-width: 0;
+  max-width: 100%;
   overflow: visible;
 }
 
 .post-calendar-event {
+  box-sizing: border-box;
   display: grid;
-  grid-template-columns: 38px minmax(0, 1fr);
+  grid-template-columns: 34px minmax(0, 1fr);
   align-items: center;
   gap: 7px;
+  width: 100%;
   min-width: 0;
+  max-width: 100%;
   padding: 6px;
   border: 1px solid rgba(214, 173, 45, 0.18);
   border-radius: var(--radius-sm);
@@ -3754,6 +3758,7 @@ label {
 .post-calendar-event--editable[aria-grabbed="true"] {
   border-color: rgba(214, 173, 45, 0.52);
   box-shadow: 0 0 0 1px rgba(214, 173, 45, 0.18);
+  opacity: 0.72;
 }
 
 .post-calendar-event--updating {
@@ -3763,8 +3768,8 @@ label {
 
 .post-calendar-event img,
 .post-calendar-event__placeholder {
-  width: 38px;
-  height: 38px;
+  width: 34px;
+  height: 34px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 6px;
   background: rgba(255, 255, 255, 0.045);
@@ -3843,14 +3848,16 @@ label {
 .post-calendar-event__controls {
   grid-column: 1 / -1;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 6px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 5px;
   min-width: 0;
+  max-width: 100%;
 }
 
 .post-calendar-event__controls input,
 .post-calendar-event__controls button {
   min-height: 28px;
+  box-sizing: border-box;
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 6px;
   background: rgba(0, 0, 0, 0.28);
@@ -3870,7 +3877,8 @@ label {
 }
 
 .post-calendar-event__controls button {
-  padding: 0 8px;
+  width: 100%;
+  padding: 0 6px;
 }
 
 .post-calendar-event__controls input:focus,
@@ -3889,6 +3897,42 @@ label {
   color: var(--color-text-muted);
   font-size: 11px;
   font-weight: 800;
+}
+
+.post-calendar-drag-ghost {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 240;
+  width: 150px;
+  max-width: calc(100vw - 24px);
+  padding: 9px 10px;
+  border: 1px solid rgba(214, 173, 45, 0.56);
+  border-radius: var(--radius-sm);
+  background: rgba(24, 20, 8, 0.94);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.42);
+  color: var(--color-text-primary);
+  pointer-events: none;
+}
+
+.post-calendar-drag-ghost span,
+.post-calendar-drag-ghost strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.post-calendar-drag-ghost span {
+  font-size: 11px;
+  font-weight: 900;
+}
+
+.post-calendar-drag-ghost strong {
+  margin-top: 2px;
+  color: #f8e7a2;
+  font-family: var(--font-mono);
+  font-size: 10px;
 }
 
 .post-calendar-note {
@@ -3914,9 +3958,13 @@ label {
     padding: 6px 8px;
   }
 
+  .post-calendar-grid {
+    grid-template-rows: auto repeat(6, minmax(154px, max-content));
+  }
+
   .post-calendar-day {
     gap: 5px;
-    min-height: 118px;
+    min-height: 154px;
     padding: 6px;
   }
 
@@ -3963,7 +4011,7 @@ label {
   }
 
   .post-calendar-grid {
-    grid-template-rows: auto repeat(6, minmax(112px, max-content));
+    grid-template-rows: auto repeat(6, minmax(142px, max-content));
     border-radius: var(--radius-sm);
   }
 
@@ -3974,7 +4022,7 @@ label {
 
   .post-calendar-day {
     gap: 4px;
-    min-height: 112px;
+    min-height: 142px;
     padding: 4px;
   }
 
