@@ -3667,14 +3667,15 @@ label {
 .post-calendar-grid {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
-  grid-template-rows: auto repeat(6, minmax(0, 1fr));
+  grid-template-rows: auto repeat(6, minmax(150px, max-content));
   min-width: 0;
   min-height: 0;
-  overflow: hidden;
+  overflow: auto;
   border: 1px solid var(--color-border-subtle);
   border-radius: var(--radius-md);
   background: var(--color-border-subtle);
   gap: 1px;
+  scrollbar-color: rgba(214, 173, 45, 0.36) rgba(255, 255, 255, 0.04);
 }
 
 .post-calendar-weekday {
@@ -3692,8 +3693,9 @@ label {
   display: grid;
   align-content: start;
   gap: 8px;
-  min-height: 0;
+  min-height: 150px;
   padding: 8px;
+  overflow: visible;
   background: rgba(11, 11, 10, 0.96);
 }
 
@@ -3725,7 +3727,7 @@ label {
   display: grid;
   gap: 6px;
   min-width: 0;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .post-calendar-event {
@@ -3881,6 +3883,7 @@ label {
 
   .post-calendar-day {
     gap: 5px;
+    min-height: 118px;
     padding: 6px;
   }
 
@@ -3927,6 +3930,7 @@ label {
   }
 
   .post-calendar-grid {
+    grid-template-rows: auto repeat(6, minmax(112px, max-content));
     border-radius: var(--radius-sm);
   }
 
@@ -3937,6 +3941,7 @@ label {
 
   .post-calendar-day {
     gap: 4px;
+    min-height: 112px;
     padding: 4px;
   }
 
