@@ -1388,10 +1388,8 @@ export const PostPanel = ({ authToken }: Props) => {
                     .filter(Boolean)
                     .join(" ")}
                   onDragOver={(event) => {
-                    if (draggedScheduledPostId) {
-                      event.preventDefault();
-                      event.dataTransfer.dropEffect = "move";
-                    }
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "move";
                   }}
                   onDrop={(event) => handleCalendarDayDrop(event, day.date)}
                   key={day.key}
@@ -1410,6 +1408,7 @@ export const PostPanel = ({ authToken }: Props) => {
                           ]
                             .filter(Boolean)
                             .join(" ")}
+                          aria-grabbed={draggedScheduledPostId === event.id}
                           draggable={canEditScheduledPost(event)}
                           onDragEnd={() => setDraggedScheduledPostId(null)}
                           onDragStart={(dragEvent) => handleScheduledPostDragStart(dragEvent, event)}
@@ -1417,14 +1416,23 @@ export const PostPanel = ({ authToken }: Props) => {
                           title={`${meta.label} at ${formatScheduledTime(event.scheduledFor, event.timezone)} - ${event.statusMessage ?? event.status}`}
                         >
                           {event.thumbnailDataUrl ? (
-                            <img alt={event.imageName ?? `${meta.label} scheduled image`} src={event.thumbnailDataUrl} />
+                            <img
+                              alt={event.imageName ?? `${meta.label} scheduled image`}
+                              draggable={false}
+                              src={event.thumbnailDataUrl}
+                            />
                           ) : (
                             <span className="post-calendar-event__placeholder">
                               {meta.shortLabel}
                             </span>
                           )}
-                          <div>
-                            <span>{meta.label}</span>
+                          <div className="post-calendar-event__details">
+                            <span>
+                              {meta.label}
+                              {canEditScheduledPost(event) ? (
+                                <span className="post-calendar-event__drag-hint">Drag</span>
+                              ) : null}
+                            </span>
                             <strong>{formatScheduledTime(event.scheduledFor, event.timezone)}</strong>
                             <small>{event.status.replace(/_/g, " ")}</small>
                           </div>
