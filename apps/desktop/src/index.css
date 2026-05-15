@@ -3865,6 +3865,10 @@ label {
   padding: 0 6px;
 }
 
+.post-calendar-event__controls input[type="date"] {
+  grid-column: 1 / -1;
+}
+
 .post-calendar-event__controls button {
   padding: 0 8px;
 }

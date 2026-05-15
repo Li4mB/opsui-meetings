@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { DragEvent } from "react";
+import type { DragEvent, PointerEvent } from "react";
 import type {
   AiPostContent,
   ScheduledSocialPlatform,
@@ -280,6 +280,12 @@ const padDatePart = (value: number) => value.toString().padStart(2, "0");
 const formatDateTimeLocalValue = (date: Date) =>
   `${date.getFullYear()}-${padDatePart(date.getMonth() + 1)}-${padDatePart(date.getDate())}T${padDatePart(date.getHours())}:${padDatePart(date.getMinutes())}`;
 
+const formatDateInputValue = (date: Date) =>
+  `${date.getFullYear()}-${padDatePart(date.getMonth() + 1)}-${padDatePart(date.getDate())}`;
+
+const formatTimeInputValue = (date: Date) =>
+  `${padDatePart(date.getHours())}:${padDatePart(date.getMinutes())}`;
+
 const buildDefaultScheduleValue = () => {
   const date = new Date();
 
@@ -395,6 +401,22 @@ const mergeDateWithPostTime = (date: Date, post: ScheduledSocialPost) => {
   next.setHours(current.getHours(), current.getMinutes(), 0, 0);
   return next;
 };
+
+const mergePostDateWithTime = (post: ScheduledSocialPost, time: string) => {
+  const [hours, minutes] = time.split(":").map(Number);
+  const next = new Date(post.scheduledFor);
+
+  if (Number.isNaN(hours) || Number.isNaN(minutes)) {
+    return next;
+  }
+
+  next.setHours(hours, minutes, 0, 0);
+  return next;
+};
+
+const isInteractiveScheduledPostTarget = (target: EventTarget | null) =>
+  target instanceof HTMLElement &&
+  Boolean(target.closest("button, input, textarea, select, a"));
 
 const buildCalendarDays = (
   monthDate: Date,
@@ -879,6 +901,38 @@ export const PostPanel = ({ authToken }: Props) => {
     setDraggedScheduledPostId(null);
 
     if (!post) {
+      return;
+    }
+
+    void handleReschedulePost(post, mergeDateWithPostTime(date, post));
+  };
+
+  const handleScheduledPostPointerDown = (
+    event: PointerEvent<HTMLElement>,
+    post: ScheduledSocialPost,
+  ) => {
+    if (
+      event.button !== 0 ||
+      !canEditScheduledPost(post) ||
+      isInteractiveScheduledPostTarget(event.target)
+    ) {
+      return;
+    }
+
+    event.preventDefault();
+    setDraggedScheduledPostId(post.id);
+  };
+
+  const handleCalendarDayPointerUp = (date: Date) => {
+    if (!draggedScheduledPostId) {
+      return;
+    }
+
+    const post = scheduledPosts.find((item) => item.id === draggedScheduledPostId);
+
+    setDraggedScheduledPostId(null);
+
+    if (!post || getLocalDateKey(new Date(post.scheduledFor)) === getLocalDateKey(date)) {
       return;
     }
 
@@ -1392,6 +1446,7 @@ export const PostPanel = ({ authToken }: Props) => {
                     event.dataTransfer.dropEffect = "move";
                   }}
                   onDrop={(event) => handleCalendarDayDrop(event, day.date)}
+                  onPointerUp={() => handleCalendarDayPointerUp(day.date)}
                   key={day.key}
                 >
                   <div className="post-calendar-day__number">{day.date.getDate()}</div>
@@ -1412,6 +1467,7 @@ export const PostPanel = ({ authToken }: Props) => {
                           draggable={canEditScheduledPost(event)}
                           onDragEnd={() => setDraggedScheduledPostId(null)}
                           onDragStart={(dragEvent) => handleScheduledPostDragStart(dragEvent, event)}
+                          onPointerDown={(pointerEvent) => handleScheduledPostPointerDown(pointerEvent, event)}
                           key={event.id}
                           title={`${meta.label} at ${formatScheduledTime(event.scheduledFor, event.timezone)} - ${event.statusMessage ?? event.status}`}
                         >
@@ -1438,18 +1494,34 @@ export const PostPanel = ({ authToken }: Props) => {
                           </div>
                           <div className="post-calendar-event__controls">
                             <input
-                              aria-label={`Move ${meta.label} post`}
+                              aria-label={`Move ${meta.label} post date`}
                               disabled={!canEditScheduledPost(event) || updatingScheduledPostIds.includes(event.id)}
-                              min={minimumScheduleAt}
+                              min={formatDateInputValue(new Date())}
                               onChange={(changeEvent) => {
-                                const nextDate = new Date(changeEvent.target.value);
+                                const nextDate = mergeDateWithPostTime(
+                                  new Date(`${changeEvent.target.value}T00:00`),
+                                  event,
+                                );
 
                                 if (!Number.isNaN(nextDate.getTime())) {
                                   void handleReschedulePost(event, nextDate);
                                 }
                               }}
-                              type="datetime-local"
-                              value={formatDateTimeLocalValue(new Date(event.scheduledFor))}
+                              type="date"
+                              value={formatDateInputValue(new Date(event.scheduledFor))}
+                            />
+                            <input
+                              aria-label={`Move ${meta.label} post time`}
+                              disabled={!canEditScheduledPost(event) || updatingScheduledPostIds.includes(event.id)}
+                              onChange={(changeEvent) => {
+                                const nextDate = mergePostDateWithTime(event, changeEvent.target.value);
+
+                                if (!Number.isNaN(nextDate.getTime())) {
+                                  void handleReschedulePost(event, nextDate);
+                                }
+                              }}
+                              type="time"
+                              value={formatTimeInputValue(new Date(event.scheduledFor))}
                             />
                             <button
                               disabled={!canEditScheduledPost(event) || updatingScheduledPostIds.includes(event.id)}
