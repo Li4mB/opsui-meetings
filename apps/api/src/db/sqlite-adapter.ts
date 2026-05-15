@@ -784,6 +784,41 @@ export const createSqliteAdapter = (): StorageAdapter => {
         .all(nowIso, limit);
     },
 
+    async rescheduleScheduledSocialPost(id, scheduledFor, timezone) {
+      const database = getDb();
+      database.prepare(`
+        UPDATE scheduled_social_posts
+        SET
+          scheduled_for = ?,
+          timezone = ?,
+          status = 'scheduled',
+          status_message = 'Waiting for scheduled publish time.',
+          published_at = NULL,
+          updated_at = ?
+        WHERE id = ?
+          AND status IN ('scheduled', 'failed', 'connection_required')
+      `).run(scheduledFor, timezone, new Date().toISOString(), id);
+
+      return (
+        database
+          .prepare<unknown[], DbScheduledSocialPostWithCreatorRow>(
+            `${selectScheduledSocialPostsQuery} WHERE scheduled_social_posts.id = ? LIMIT 1`,
+          )
+          .get(id) ?? null
+      );
+    },
+
+    async deleteScheduledSocialPost(id) {
+      const database = getDb();
+      const result = database.prepare(`
+        DELETE FROM scheduled_social_posts
+        WHERE id = ?
+          AND status IN ('scheduled', 'failed', 'connection_required', 'cancelled')
+      `).run(id);
+
+      return result.changes > 0;
+    },
+
     async updateScheduledSocialPostStatus(id, status, patch = {}) {
       const database = getDb();
       database.prepare(`

@@ -16,6 +16,7 @@ import {
   meetingsResponseSchema,
   meetingSchema,
   scheduledSocialPostsResponseSchema,
+  rescheduleSocialPostInputSchema,
   scheduleSocialPostsInputSchema,
   type LoginInput,
   sessionSchema,
@@ -283,6 +284,32 @@ export const scheduleSocialPosts = (
       method: "POST",
       headers: withToken(token),
       body: JSON.stringify(scheduleSocialPostsInputSchema.parse(input)),
+    },
+    scheduledSocialPostsResponseSchema,
+  );
+
+export const rescheduleSocialPost = (
+  token: string,
+  postId: string,
+  input: z.infer<typeof rescheduleSocialPostInputSchema>,
+) =>
+  request(
+    `/social-posts/${postId}/reschedule`,
+    {
+      method: "POST",
+      headers: withToken(token),
+      body: JSON.stringify(rescheduleSocialPostInputSchema.parse(input)),
+    },
+    scheduledSocialPostsResponseSchema,
+  );
+
+export const deleteScheduledSocialPost = (token: string, postId: string) =>
+  request(
+    `/social-posts/${postId}/delete`,
+    {
+      method: "POST",
+      headers: withToken(token),
+      body: JSON.stringify({}),
     },
     scheduledSocialPostsResponseSchema,
   );

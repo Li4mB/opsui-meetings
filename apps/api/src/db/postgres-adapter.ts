@@ -803,6 +803,42 @@ export const createPostgresAdapter = (): StorageAdapter => {
       );
     },
 
+    async rescheduleScheduledSocialPost(id, scheduledFor, timezone) {
+      await execute(
+        `
+          UPDATE ${scheduledSocialPostsTable}
+          SET
+            scheduled_for = $1,
+            timezone = $2,
+            status = 'scheduled',
+            status_message = 'Waiting for scheduled publish time.',
+            published_at = NULL,
+            updated_at = $3
+          WHERE id = $4
+            AND status IN ('scheduled', 'failed', 'connection_required')
+        `,
+        [scheduledFor, timezone, new Date().toISOString(), id],
+      );
+
+      return queryRow<DbScheduledSocialPostWithCreatorRow>(
+        `${selectScheduledSocialPostsQuery} WHERE scheduled_social_posts.id = $1 LIMIT 1`,
+        [id],
+      );
+    },
+
+    async deleteScheduledSocialPost(id) {
+      const result = await execute(
+        `
+          DELETE FROM ${scheduledSocialPostsTable}
+          WHERE id = $1
+            AND status IN ('scheduled', 'failed', 'connection_required', 'cancelled')
+        `,
+        [id],
+      );
+
+      return (result.rowCount ?? 0) > 0;
+    },
+
     async updateScheduledSocialPostStatus(id, status, patch = {}) {
       await execute(
         `

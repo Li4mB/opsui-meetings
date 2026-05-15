@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { DragEvent } from "react";
 import type {
   AiPostContent,
   ScheduledSocialPlatform,
@@ -7,9 +8,11 @@ import type {
 import opsLogo from "../assets/op.png";
 import {
   ApiError,
+  deleteScheduledSocialPost,
   generatePostContent,
   generatePostImage,
   getScheduledSocialPosts,
+  rescheduleSocialPost,
   scheduleSocialPosts,
 } from "../lib/api";
 
@@ -382,6 +385,17 @@ const formatScheduledTime = (isoDate: string, timezone: string) =>
 const getLocalDateKey = (date: Date) =>
   `${date.getFullYear()}-${padDatePart(date.getMonth() + 1)}-${padDatePart(date.getDate())}`;
 
+const canEditScheduledPost = (post: ScheduledSocialPost) =>
+  ["scheduled", "failed", "connection_required"].includes(post.status);
+
+const mergeDateWithPostTime = (date: Date, post: ScheduledSocialPost) => {
+  const current = new Date(post.scheduledFor);
+  const next = new Date(date);
+
+  next.setHours(current.getHours(), current.getMinutes(), 0, 0);
+  return next;
+};
+
 const buildCalendarDays = (
   monthDate: Date,
   scheduledPosts: ScheduledSocialPost[],
@@ -432,6 +446,8 @@ export const PostPanel = ({ authToken }: Props) => {
   const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
   const [showScheduledQueue, setShowScheduledQueue] = useState(false);
   const [queueMonth, setQueueMonth] = useState(() => new Date());
+  const [draggedScheduledPostId, setDraggedScheduledPostId] = useState<string | null>(null);
+  const [updatingScheduledPostIds, setUpdatingScheduledPostIds] = useState<string[]>([]);
   const masterCaptionInputRef = useRef<HTMLTextAreaElement | null>(null);
   const postImageRef = useRef<PostImage | null>(null);
   const userTimezone = useMemo(getUserTimezone, []);
@@ -767,6 +783,106 @@ export const PostPanel = ({ authToken }: Props) => {
 
   const shiftQueueMonth = (monthOffset: number) => {
     setQueueMonth((current) => new Date(current.getFullYear(), current.getMonth() + monthOffset, 1));
+  };
+
+  const setScheduledPostUpdating = (postId: string, updating: boolean) => {
+    setUpdatingScheduledPostIds((current) =>
+      updating
+        ? [...new Set([...current, postId])]
+        : current.filter((id) => id !== postId),
+    );
+  };
+
+  const handleRemoveScheduledPost = async (post: ScheduledSocialPost) => {
+    if (!canEditScheduledPost(post)) {
+      setSaveNotice("Published or publishing posts cannot be removed.");
+      return;
+    }
+
+    setScheduledPostUpdating(post.id, true);
+
+    try {
+      const response = await deleteScheduledSocialPost(authToken, post.id);
+
+      setScheduledPosts(response.posts);
+      setSaveNotice(`${platformById[post.platform].label} post removed from the queue.`);
+    } catch (error) {
+      setSaveNotice(
+        error instanceof ApiError
+          ? `Remove failed: ${error.message}`
+          : "Remove failed. Try again.",
+      );
+    } finally {
+      setScheduledPostUpdating(post.id, false);
+    }
+  };
+
+  const handleReschedulePost = async (post: ScheduledSocialPost, date: Date) => {
+    if (!canEditScheduledPost(post)) {
+      setSaveNotice("Published or publishing posts cannot be moved.");
+      return;
+    }
+
+    if (Number.isNaN(date.getTime())) {
+      setSaveNotice("Choose a valid go-live date and time.");
+      return;
+    }
+
+    if (date.getTime() <= Date.now()) {
+      setSaveNotice("Choose a future go-live time.");
+      return;
+    }
+
+    setScheduledPostUpdating(post.id, true);
+
+    try {
+      const scheduledFor = date.toISOString();
+      const response = await rescheduleSocialPost(authToken, post.id, {
+        scheduledFor,
+        timezone: userTimezone,
+      });
+
+      setScheduledPosts(response.posts);
+      setQueueMonth(new Date(date.getFullYear(), date.getMonth(), 1));
+      setSaveNotice(`${platformById[post.platform].label} post moved to ${formatScheduledDateTime(scheduledFor, userTimezone)}.`);
+    } catch (error) {
+      setSaveNotice(
+        error instanceof ApiError
+          ? `Move failed: ${error.message}`
+          : "Move failed. Try again.",
+      );
+    } finally {
+      setScheduledPostUpdating(post.id, false);
+    }
+  };
+
+  const handleScheduledPostDragStart = (
+    event: DragEvent<HTMLElement>,
+    post: ScheduledSocialPost,
+  ) => {
+    if (!canEditScheduledPost(post)) {
+      event.preventDefault();
+      return;
+    }
+
+    setDraggedScheduledPostId(post.id);
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", post.id);
+  };
+
+  const handleCalendarDayDrop = (event: DragEvent<HTMLDivElement>, date: Date) => {
+    event.preventDefault();
+
+    const postId = event.dataTransfer.getData("text/plain") || draggedScheduledPostId;
+    const post = scheduledPosts.find((item) => item.id === postId);
+
+    setDraggedScheduledPostId(null);
+
+    if (!post) {
+      return;
+    }
+
+    void handleReschedulePost(post, mergeDateWithPostTime(date, post));
   };
 
   const validateScheduleContent = () => {
@@ -1264,12 +1380,20 @@ export const PostPanel = ({ authToken }: Props) => {
                   className={[
                     "post-calendar-day",
                     day.inCurrentMonth ? "" : "post-calendar-day--muted",
+                    draggedScheduledPostId ? "post-calendar-day--drop-ready" : "",
                     getLocalDateKey(day.date) === getLocalDateKey(new Date())
                       ? "post-calendar-day--today"
                       : "",
                   ]
                     .filter(Boolean)
                     .join(" ")}
+                  onDragOver={(event) => {
+                    if (draggedScheduledPostId) {
+                      event.preventDefault();
+                      event.dataTransfer.dropEffect = "move";
+                    }
+                  }}
+                  onDrop={(event) => handleCalendarDayDrop(event, day.date)}
                   key={day.key}
                 >
                   <div className="post-calendar-day__number">{day.date.getDate()}</div>
@@ -1279,7 +1403,16 @@ export const PostPanel = ({ authToken }: Props) => {
 
                       return (
                         <article
-                          className="post-calendar-event"
+                          className={[
+                            "post-calendar-event",
+                            canEditScheduledPost(event) ? "post-calendar-event--editable" : "",
+                            updatingScheduledPostIds.includes(event.id) ? "post-calendar-event--updating" : "",
+                          ]
+                            .filter(Boolean)
+                            .join(" ")}
+                          draggable={canEditScheduledPost(event)}
+                          onDragEnd={() => setDraggedScheduledPostId(null)}
+                          onDragStart={(dragEvent) => handleScheduledPostDragStart(dragEvent, event)}
                           key={event.id}
                           title={`${meta.label} at ${formatScheduledTime(event.scheduledFor, event.timezone)} - ${event.statusMessage ?? event.status}`}
                         >
@@ -1294,6 +1427,29 @@ export const PostPanel = ({ authToken }: Props) => {
                             <span>{meta.label}</span>
                             <strong>{formatScheduledTime(event.scheduledFor, event.timezone)}</strong>
                             <small>{event.status.replace(/_/g, " ")}</small>
+                          </div>
+                          <div className="post-calendar-event__controls">
+                            <input
+                              aria-label={`Move ${meta.label} post`}
+                              disabled={!canEditScheduledPost(event) || updatingScheduledPostIds.includes(event.id)}
+                              min={minimumScheduleAt}
+                              onChange={(changeEvent) => {
+                                const nextDate = new Date(changeEvent.target.value);
+
+                                if (!Number.isNaN(nextDate.getTime())) {
+                                  void handleReschedulePost(event, nextDate);
+                                }
+                              }}
+                              type="datetime-local"
+                              value={formatDateTimeLocalValue(new Date(event.scheduledFor))}
+                            />
+                            <button
+                              disabled={!canEditScheduledPost(event) || updatingScheduledPostIds.includes(event.id)}
+                              onClick={() => void handleRemoveScheduledPost(event)}
+                              type="button"
+                            >
+                              Remove
+                            </button>
                           </div>
                         </article>
                       );

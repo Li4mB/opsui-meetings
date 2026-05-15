@@ -37,6 +37,11 @@ export const scheduleSocialPostsInputSchema = z
     "Add a caption or image before scheduling.",
   );
 
+export const rescheduleSocialPostInputSchema = z.object({
+  scheduledFor: z.string().datetime(),
+  timezone: z.string().min(1).max(120),
+});
+
 export const scheduledSocialPostSchema = z.object({
   id: z.string(),
   platform: scheduledSocialPlatformSchema,
@@ -63,4 +68,5 @@ export const scheduledSocialPostsResponseSchema = z.object({
 export type ScheduledSocialPlatform = z.infer<typeof scheduledSocialPlatformSchema>;
 export type ScheduledSocialPostStatus = z.infer<typeof scheduledSocialPostStatusSchema>;
 export type ScheduleSocialPostsInput = z.infer<typeof scheduleSocialPostsInputSchema>;
+export type RescheduleSocialPostInput = z.infer<typeof rescheduleSocialPostInputSchema>;
 export type ScheduledSocialPost = z.infer<typeof scheduledSocialPostSchema>;

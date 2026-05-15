@@ -1,4 +1,5 @@
 import {
+  rescheduleSocialPostInputSchema,
   scheduledSocialPostSchema,
   scheduledSocialPostsResponseSchema,
   scheduleSocialPostsInputSchema,
@@ -137,6 +138,47 @@ export const registerSocialPostRoutes = (
     { preHandler: [authenticateRequest, requireAdmin] },
     async () => {
       await processDueScheduledSocialPosts();
+      return scheduledPostsResponse();
+    },
+  );
+
+  app.post(
+    "/social-posts/:id/reschedule",
+    { preHandler: [authenticateRequest] },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const input = rescheduleSocialPostInputSchema.parse(request.body);
+      const scheduledDate = new Date(input.scheduledFor);
+
+      if (scheduledDate.getTime() <= Date.now()) {
+        return reply.badRequest("Choose a future go-live time.");
+      }
+
+      const updated = await storage.rescheduleScheduledSocialPost(
+        id,
+        scheduledDate.toISOString(),
+        input.timezone,
+      );
+
+      if (!updated) {
+        return reply.notFound("Scheduled post not found or cannot be moved.");
+      }
+
+      return scheduledPostsResponse();
+    },
+  );
+
+  app.post(
+    "/social-posts/:id/delete",
+    { preHandler: [authenticateRequest] },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const removed = await storage.deleteScheduledSocialPost(id);
+
+      if (!removed) {
+        return reply.notFound("Scheduled post not found or cannot be removed.");
+      }
+
       return scheduledPostsResponse();
     },
   );

@@ -3709,6 +3709,11 @@ label {
   box-shadow: inset 0 0 0 1px rgba(214, 173, 45, 0.42);
 }
 
+.post-calendar-day--drop-ready {
+  outline: 1px dashed rgba(214, 173, 45, 0.38);
+  outline-offset: -4px;
+}
+
 .post-calendar-day__number {
   color: var(--color-text-secondary);
   font-family: var(--font-mono);
@@ -3733,6 +3738,19 @@ label {
   border: 1px solid rgba(214, 173, 45, 0.18);
   border-radius: var(--radius-sm);
   background: rgba(214, 173, 45, 0.075);
+}
+
+.post-calendar-event--editable {
+  cursor: grab;
+}
+
+.post-calendar-event--editable:active {
+  cursor: grabbing;
+}
+
+.post-calendar-event--updating {
+  opacity: 0.58;
+  pointer-events: none;
 }
 
 .post-calendar-event img,
@@ -3791,6 +3809,47 @@ label {
   white-space: nowrap;
 }
 
+.post-calendar-event__controls {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  min-width: 0;
+}
+
+.post-calendar-event__controls input,
+.post-calendar-event__controls button {
+  min-height: 28px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.28);
+  color: var(--color-text-secondary);
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.post-calendar-event__controls input {
+  width: 100%;
+  min-width: 0;
+  padding: 0 6px;
+}
+
+.post-calendar-event__controls button {
+  padding: 0 8px;
+}
+
+.post-calendar-event__controls input:focus,
+.post-calendar-event__controls button:hover:not(:disabled) {
+  border-color: rgba(214, 173, 45, 0.42);
+  color: var(--color-text-primary);
+}
+
+.post-calendar-event__controls input:disabled,
+.post-calendar-event__controls button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .post-calendar-more {
   color: var(--color-text-muted);
   font-size: 11px;
@@ -3843,6 +3902,15 @@ label {
 
   .post-calendar-event small {
     display: none;
+  }
+
+  .post-calendar-event__controls {
+    grid-template-columns: 1fr;
+  }
+
+  .post-calendar-event__controls input,
+  .post-calendar-event__controls button {
+    min-height: 24px;
   }
 }
 

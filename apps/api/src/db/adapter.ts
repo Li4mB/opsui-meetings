@@ -75,6 +75,12 @@ export interface StorageAdapter {
     nowIso: string,
     limit: number,
   ): Promise<DbScheduledSocialPostWithCreatorRow[]>;
+  rescheduleScheduledSocialPost(
+    id: string,
+    scheduledFor: string,
+    timezone: string,
+  ): Promise<DbScheduledSocialPostWithCreatorRow | null>;
+  deleteScheduledSocialPost(id: string): Promise<boolean>;
   updateScheduledSocialPostStatus(
     id: string,
     status: DbScheduledSocialPostStatus,
