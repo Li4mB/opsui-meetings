@@ -400,8 +400,8 @@ export const AppShell = ({
                 <div className="sidebar-section__label">Post workspace</div>
                 <div className="sidebar-panel__title">Social publisher</div>
                 <div className="sidebar-meta">
-                  Build one caption and one visual, then stage channel previews before
-                  any account connection is added.
+                  Build one caption and one visual, then publish through connected
+                  social accounts.
                 </div>
               </section>
 
@@ -410,7 +410,7 @@ export const AppShell = ({
                 <div className="sidebar-meta">
                   <div>Use the two prompt boxes to generate the post.</div>
                   <div>Select channels to create platform previews.</div>
-                  <div>{syncMessage ?? "Push is staged until social accounts are connected."}</div>
+                  <div>{syncMessage ?? "Push sends directly to connected platforms."}</div>
                 </div>
               </section>
 
@@ -745,7 +745,10 @@ export const AppShell = ({
             </>
           )}
           <div className="post-surface" hidden={activeSurfaceMode !== "post"}>
-            <PostPanel authToken={session.token} />
+            <PostPanel
+              authToken={session.token}
+              canManageSocialAccounts={canAccessAdmin}
+            />
           </div>
         </main>
       </div>

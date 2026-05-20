@@ -12,7 +12,12 @@ import os from "node:os";
 import { env } from "../config/env.js";
 import { createSqliteAdapter } from "../db/sqlite-adapter.js";
 import type { StorageAdapter } from "../db/adapter.js";
-import type { CalendarMeeting, DbScheduledSocialPostRow, DbUserRow } from "../types.js";
+import type {
+  CalendarMeeting,
+  DbScheduledSocialPostRow,
+  DbSocialAccountRow,
+  DbUserRow,
+} from "../types.js";
 
 // Save original dbPath so we can restore it
 const originalDbPath = env.dbPath;
@@ -333,6 +338,7 @@ describe("8. Scheduled Social Posts", () => {
     assert.equal(posts.length, 1);
     assert.equal(posts[0].caption, "Scheduled OpsUI post");
     assert.equal(posts[0].created_by_user_name, "OpsUI Admin");
+    assert.ok(await adapter.findScheduledSocialPostById(row.id));
   });
 
   it("finds due posts and updates publish status", async () => {
@@ -349,5 +355,47 @@ describe("8. Scheduled Social Posts", () => {
     assert.equal(updated!.status, "published");
     assert.equal(updated!.external_post_id, "external-1");
     assert.equal((await adapter.listDueScheduledSocialPosts("2026-06-01T00:02:00.000Z", 10)).length, 0);
+  });
+
+  it("stores, updates, and disconnects social accounts", async () => {
+    const now = new Date().toISOString();
+    const row: DbSocialAccountRow = {
+      id: nanoid(),
+      platform: "facebook",
+      display_name: "OpsUI Facebook",
+      account_id: "page-1",
+      access_token: "token-1",
+      token_type: "Bearer",
+      expires_at: null,
+      scopes: "pages_manage_posts",
+      metadata_json: "{}",
+      active: 1,
+      created_by_user_id: admin.id,
+      created_at: now,
+      updated_at: now,
+    };
+
+    await adapter.upsertSocialAccount(row);
+    assert.equal((await adapter.listSocialAccounts()).length, 1);
+    assert.equal(
+      (await adapter.findSocialAccountByPlatform("facebook"))!.display_name,
+      "OpsUI Facebook",
+    );
+
+    await adapter.upsertSocialAccount({
+      ...row,
+      id: nanoid(),
+      display_name: "OpsUI Facebook Updated",
+      access_token: "token-2",
+      updated_at: new Date().toISOString(),
+    });
+
+    const updated = await adapter.findSocialAccountByPlatform("facebook");
+
+    assert.ok(updated);
+    assert.equal(updated!.display_name, "OpsUI Facebook Updated");
+    assert.equal(updated!.access_token, "token-2");
+    assert.ok(await adapter.deleteSocialAccount(updated!.id));
+    assert.equal(await adapter.findSocialAccountByPlatform("facebook"), null);
   });
 });

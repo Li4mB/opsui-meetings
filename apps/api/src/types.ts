@@ -79,9 +79,11 @@ export type DbScheduledSocialPostStatus =
   | "connection_required"
   | "cancelled";
 
+export type DbSocialPlatform = "facebook" | "linkedin" | "twitter" | "instagram";
+
 export type DbScheduledSocialPostRow = {
   id: string;
-  platform: "facebook" | "linkedin" | "twitter" | "instagram";
+  platform: DbSocialPlatform;
   caption: string;
   image_data_url: string | null;
   image_name: string | null;
@@ -92,6 +94,22 @@ export type DbScheduledSocialPostRow = {
   status_message: string | null;
   external_post_id: string | null;
   published_at: string | null;
+  created_by_user_id: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type DbSocialAccountRow = {
+  id: string;
+  platform: DbSocialPlatform;
+  display_name: string;
+  account_id: string;
+  access_token: string;
+  token_type: string | null;
+  expires_at: string | null;
+  scopes: string | null;
+  metadata_json: string;
+  active: number;
   created_by_user_id: string;
   created_at: string;
   updated_at: string;

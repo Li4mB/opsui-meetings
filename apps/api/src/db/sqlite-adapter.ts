@@ -17,6 +17,7 @@ import type {
   DbMeetingWithAssignmentRow,
   DbPastMeetingWithAssignmentRow,
   DbScheduledSocialPostWithCreatorRow,
+  DbSocialAccountWithCreatorRow,
   ReplaceMeetingsResult,
   StorageAdapter,
 } from "./adapter.js";
@@ -142,6 +143,26 @@ const schemaSql = `
 
   CREATE INDEX IF NOT EXISTS idx_scheduled_social_posts_due
     ON scheduled_social_posts(status, scheduled_for);
+
+  CREATE TABLE IF NOT EXISTS social_accounts (
+    id TEXT PRIMARY KEY,
+    platform TEXT NOT NULL UNIQUE CHECK(platform IN ('facebook', 'linkedin', 'twitter', 'instagram')),
+    display_name TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    access_token TEXT NOT NULL,
+    token_type TEXT,
+    expires_at TEXT,
+    scopes TEXT,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    active INTEGER NOT NULL DEFAULT 1,
+    created_by_user_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (created_by_user_id) REFERENCES users(id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_social_accounts_platform
+    ON social_accounts(platform, active);
 `;
 
 const selectActiveMeetingsQuery = `
@@ -168,6 +189,14 @@ const selectScheduledSocialPostsQuery = `
     users.display_name AS created_by_user_name
   FROM scheduled_social_posts
   LEFT JOIN users ON users.id = scheduled_social_posts.created_by_user_id
+`;
+
+const selectSocialAccountsQuery = `
+  SELECT
+    social_accounts.*,
+    users.display_name AS created_by_user_name
+  FROM social_accounts
+  LEFT JOIN users ON users.id = social_accounts.created_by_user_id
 `;
 
 const buildWhereClause = (tableName: "meetings" | "past_meetings", filters: DbMeetingFilters) => {
@@ -771,6 +800,17 @@ export const createSqliteAdapter = (): StorageAdapter => {
         .all();
     },
 
+    async findScheduledSocialPostById(id) {
+      const database = getDb();
+      return (
+        database
+          .prepare<unknown[], DbScheduledSocialPostWithCreatorRow>(
+            `${selectScheduledSocialPostsQuery} WHERE scheduled_social_posts.id = ? LIMIT 1`,
+          )
+          .get(id) ?? null
+      );
+    },
+
     async listDueScheduledSocialPosts(nowIso, limit) {
       const database = getDb();
       return database
@@ -846,6 +886,83 @@ export const createSqliteAdapter = (): StorageAdapter => {
           )
           .get(id) ?? null
       );
+    },
+
+    async upsertSocialAccount(row) {
+      const database = getDb();
+      database.prepare(`
+        INSERT INTO social_accounts (
+          id,
+          platform,
+          display_name,
+          account_id,
+          access_token,
+          token_type,
+          expires_at,
+          scopes,
+          metadata_json,
+          active,
+          created_by_user_id,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(platform) DO UPDATE SET
+          display_name = excluded.display_name,
+          account_id = excluded.account_id,
+          access_token = excluded.access_token,
+          token_type = excluded.token_type,
+          expires_at = excluded.expires_at,
+          scopes = excluded.scopes,
+          metadata_json = excluded.metadata_json,
+          active = excluded.active,
+          created_by_user_id = excluded.created_by_user_id,
+          updated_at = excluded.updated_at
+      `).run(
+        row.id,
+        row.platform,
+        row.display_name,
+        row.account_id,
+        row.access_token,
+        row.token_type,
+        row.expires_at,
+        row.scopes,
+        row.metadata_json,
+        row.active,
+        row.created_by_user_id,
+        row.created_at,
+        row.updated_at,
+      );
+    },
+
+    async listSocialAccounts() {
+      const database = getDb();
+      return database
+        .prepare<unknown[], DbSocialAccountWithCreatorRow>(
+          `${selectSocialAccountsQuery}
+           WHERE social_accounts.active = 1
+           ORDER BY social_accounts.platform ASC`,
+        )
+        .all();
+    },
+
+    async findSocialAccountByPlatform(platform) {
+      const database = getDb();
+      return (
+        database
+          .prepare<unknown[], DbSocialAccountWithCreatorRow>(
+            `${selectSocialAccountsQuery}
+             WHERE social_accounts.platform = ?
+               AND social_accounts.active = 1
+             LIMIT 1`,
+          )
+          .get(platform) ?? null
+      );
+    },
+
+    async deleteSocialAccount(id) {
+      const database = getDb();
+      const result = database.prepare("DELETE FROM social_accounts WHERE id = ?").run(id);
+      return result.changes > 0;
     },
   };
 };

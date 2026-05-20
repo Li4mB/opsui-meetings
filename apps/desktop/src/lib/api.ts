@@ -10,14 +10,18 @@ import {
   authBootstrapSchema,
   authMeSchema,
   assignmentInputSchema,
+  connectSocialAccountInputSchema,
   createMeetingRequestInputSchema,
   createUserInputSchema,
   meetingRequestSchema,
   meetingsResponseSchema,
   meetingSchema,
+  publishSocialPostsInputSchema,
+  publishSocialPostsResponseSchema,
   scheduledSocialPostsResponseSchema,
   rescheduleSocialPostInputSchema,
   scheduleSocialPostsInputSchema,
+  socialAccountsResponseSchema,
   type LoginInput,
   sessionSchema,
   syncResponseSchema,
@@ -274,6 +278,40 @@ export const getScheduledSocialPosts = (token: string) =>
     scheduledSocialPostsResponseSchema,
   );
 
+export const getSocialAccounts = (token: string) =>
+  request(
+    "/social-accounts",
+    {
+      method: "GET",
+      headers: withToken(token),
+    },
+    socialAccountsResponseSchema,
+  );
+
+export const connectSocialAccount = (
+  token: string,
+  input: z.infer<typeof connectSocialAccountInputSchema>,
+) =>
+  request(
+    "/social-accounts",
+    {
+      method: "POST",
+      headers: withToken(token),
+      body: JSON.stringify(connectSocialAccountInputSchema.parse(input)),
+    },
+    socialAccountsResponseSchema,
+  );
+
+export const deleteSocialAccount = (token: string, accountId: string) =>
+  request(
+    `/social-accounts/${encodeURIComponent(accountId)}`,
+    {
+      method: "DELETE",
+      headers: withToken(token),
+    },
+    socialAccountsResponseSchema,
+  );
+
 export const scheduleSocialPosts = (
   token: string,
   input: z.infer<typeof scheduleSocialPostsInputSchema>,
@@ -312,6 +350,20 @@ export const deleteScheduledSocialPost = (token: string, postId: string) =>
       body: JSON.stringify({}),
     },
     scheduledSocialPostsResponseSchema,
+  );
+
+export const publishSocialPosts = (
+  token: string,
+  input: z.infer<typeof publishSocialPostsInputSchema>,
+) =>
+  request(
+    "/social-posts/publish",
+    {
+      method: "POST",
+      headers: withToken(token),
+      body: JSON.stringify(publishSocialPostsInputSchema.parse(input)),
+    },
+    publishSocialPostsResponseSchema,
   );
 
 export const unlockMeetingGuide = (token: string, meetingId: string) =>

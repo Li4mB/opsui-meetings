@@ -1,17 +1,22 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent, PointerEvent } from "react";
 import type {
   AiPostContent,
+  SocialAccount,
   ScheduledSocialPlatform,
   ScheduledSocialPost,
 } from "@opsui/shared";
 import opsLogo from "../assets/op.png";
 import {
   ApiError,
+  connectSocialAccount,
+  deleteSocialAccount,
   deleteScheduledSocialPost,
   generatePostContent,
   generatePostImage,
   getScheduledSocialPosts,
+  getSocialAccounts,
+  publishSocialPosts,
   rescheduleSocialPost,
   scheduleSocialPosts,
 } from "../lib/api";
@@ -34,6 +39,13 @@ type PostImage = {
   objectUrl: boolean;
 };
 
+type SocialAccountForm = {
+  displayName: string;
+  accountId: string;
+  accessToken: string;
+  expiresAt: string;
+};
+
 type CalendarDay = {
   key: string;
   date: Date;
@@ -43,6 +55,7 @@ type CalendarDay = {
 
 type Props = {
   authToken: string;
+  canManageSocialAccounts: boolean;
 };
 
 type PlatformMeta = {
@@ -283,6 +296,18 @@ const formatDateTimeLocalValue = (date: Date) =>
 const formatTimeInputValue = (date: Date) =>
   `${padDatePart(date.getHours())}:${padDatePart(date.getMinutes())}`;
 
+const createSocialAccountForm = (
+  platform: SocialPlatform,
+  account?: SocialAccount,
+): SocialAccountForm => ({
+  displayName: account?.displayName ?? platformById[platform].label,
+  accountId: account?.accountId ?? "",
+  accessToken: "",
+  expiresAt: account?.expiresAt
+    ? formatDateTimeLocalValue(new Date(account.expiresAt))
+    : "",
+});
+
 const buildDefaultScheduleValue = () => {
   const date = new Date();
 
@@ -447,7 +472,7 @@ const buildCalendarDays = (
   });
 };
 
-export const PostPanel = ({ authToken }: Props) => {
+export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
   const [captionPrompt, setCaptionPrompt] = useState(defaultCaptionPrompt);
   const [imagePrompt, setImagePrompt] = useState(defaultImagePrompt);
   const [masterCaption, setMasterCaption] = useState("");
@@ -458,10 +483,18 @@ export const PostPanel = ({ authToken }: Props) => {
   const [isGeneratingCaption, setIsGeneratingCaption] = useState(false);
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
   const [isSchedulingPost, setIsSchedulingPost] = useState(false);
+  const [isPublishingPost, setIsPublishingPost] = useState(false);
   const [saveNotice, setSaveNotice] = useState<string | null>(null);
   const [scheduleAt, setScheduleAt] = useState(buildDefaultScheduleValue);
   const [scheduledPosts, setScheduledPosts] = useState<ScheduledSocialPost[]>([]);
   const [isScheduledQueueLoading, setIsScheduledQueueLoading] = useState(false);
+  const [socialAccounts, setSocialAccounts] = useState<SocialAccount[]>([]);
+  const [isSocialAccountsLoading, setIsSocialAccountsLoading] = useState(false);
+  const [connectPlatform, setConnectPlatform] = useState<SocialPlatform | null>(null);
+  const [accountForm, setAccountForm] = useState<SocialAccountForm>(() =>
+    createSocialAccountForm("facebook"),
+  );
+  const [isSavingSocialAccount, setIsSavingSocialAccount] = useState(false);
   const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
   const [showScheduledQueue, setShowScheduledQueue] = useState(false);
   const [queueMonth, setQueueMonth] = useState(() => new Date());
@@ -504,6 +537,16 @@ export const PostPanel = ({ authToken }: Props) => {
         : null,
     [draggedScheduledPostId, scheduledPosts],
   );
+  const socialAccountByPlatform = useMemo(
+    () =>
+      Object.fromEntries(
+        socialAccounts.map((account) => [account.platform, account]),
+      ) as Partial<Record<SocialPlatform, SocialAccount>>,
+    [socialAccounts],
+  );
+  const connectedPlatformCount = socialPlatforms.filter(
+    (platform) => socialAccountByPlatform[platform.id]?.connected,
+  ).length;
   const queueMonthLabel = useMemo(
     () =>
       new Intl.DateTimeFormat(undefined, {
@@ -556,6 +599,36 @@ export const PostPanel = ({ authToken }: Props) => {
   }, [authToken]);
 
   useEffect(() => {
+    let cancelled = false;
+
+    const loadSocialAccounts = async () => {
+      setIsSocialAccountsLoading(true);
+
+      try {
+        const response = await getSocialAccounts(authToken);
+
+        if (!cancelled) {
+          setSocialAccounts(response.accounts);
+        }
+      } catch {
+        if (!cancelled) {
+          setSaveNotice("Unable to load connected social accounts.");
+        }
+      } finally {
+        if (!cancelled) {
+          setIsSocialAccountsLoading(false);
+        }
+      }
+    };
+
+    void loadSocialAccounts();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authToken]);
+
+  useEffect(() => {
     if (!saveNotice) {
       return undefined;
     }
@@ -598,41 +671,6 @@ export const PostPanel = ({ authToken }: Props) => {
     return () => window.removeEventListener("opsui:open-post-calendar", handleOpenPostCalendar);
   }, []);
 
-  useEffect(() => {
-    if (!draggedScheduledPostId) {
-      return undefined;
-    }
-
-    const handlePointerMove = (event: globalThis.PointerEvent) => {
-      setScheduledDragPoint({ x: event.clientX, y: event.clientY });
-    };
-
-    const handlePointerUp = (event: globalThis.PointerEvent) => {
-      const post = scheduledPosts.find((item) => item.id === draggedScheduledPostId);
-      const dropTarget = document
-        .elementFromPoint(event.clientX, event.clientY)
-        ?.closest<HTMLElement>("[data-post-calendar-day]");
-      const day = calendarDays.find((item) => item.key === dropTarget?.dataset.postCalendarDay);
-
-      setDraggedScheduledPostId(null);
-      setScheduledDragPoint(null);
-
-      if (!post || !day || getLocalDateKey(new Date(post.scheduledFor)) === day.key) {
-        return;
-      }
-
-      void handleReschedulePost(post, mergeDateWithPostTime(day.date, post));
-    };
-
-    window.addEventListener("pointermove", handlePointerMove);
-    window.addEventListener("pointerup", handlePointerUp);
-
-    return () => {
-      window.removeEventListener("pointermove", handlePointerMove);
-      window.removeEventListener("pointerup", handlePointerUp);
-    };
-  }, [calendarDays, draggedScheduledPostId, scheduledPosts]);
-
   const replaceImage = (image: PostImage | null) => {
     setPostImage((current) => {
       revokePostImage(current);
@@ -670,6 +708,92 @@ export const PostPanel = ({ authToken }: Props) => {
   const handleMasterCaptionChange = (caption: string) => {
     setMasterCaption(caption);
     syncDraftCaptions(caption);
+  };
+
+  const openSocialAccountDialog = (platform: SocialPlatform) => {
+    setConnectPlatform(platform);
+    setAccountForm(createSocialAccountForm(platform, socialAccountByPlatform[platform]));
+  };
+
+  const closeSocialAccountDialog = () => {
+    setConnectPlatform(null);
+    setAccountForm(createSocialAccountForm("facebook"));
+  };
+
+  const handleSaveSocialAccount = async () => {
+    if (!connectPlatform) {
+      return;
+    }
+
+    if (!canManageSocialAccounts) {
+      setSaveNotice("Admin access is required to connect social accounts.");
+      return;
+    }
+
+    const displayName = accountForm.displayName.trim() || platformById[connectPlatform].label;
+    const accountId = accountForm.accountId.trim() || displayName;
+    const accessToken = accountForm.accessToken.trim();
+
+    if (!accessToken) {
+      setSaveNotice("Paste the platform access token before saving.");
+      return;
+    }
+
+    setIsSavingSocialAccount(true);
+
+    try {
+      const response = await connectSocialAccount(authToken, {
+        platform: connectPlatform,
+        displayName,
+        accountId,
+        accessToken,
+        expiresAt: accountForm.expiresAt
+          ? new Date(accountForm.expiresAt).toISOString()
+          : null,
+      });
+
+      setSocialAccounts(response.accounts);
+      setSaveNotice(`${platformById[connectPlatform].label} account connected.`);
+      closeSocialAccountDialog();
+    } catch (error) {
+      setSaveNotice(
+        error instanceof ApiError
+          ? error.message
+          : `Unable to connect ${platformById[connectPlatform].label}.`,
+      );
+    } finally {
+      setIsSavingSocialAccount(false);
+    }
+  };
+
+  const handleDisconnectSocialAccount = async (platform: SocialPlatform) => {
+    const account = socialAccountByPlatform[platform];
+
+    if (!account) {
+      return;
+    }
+
+    if (account.source === "environment") {
+      setSaveNotice("This account is managed by API environment variables.");
+      return;
+    }
+
+    if (!window.confirm(`Disconnect ${platformById[platform].label}?`)) {
+      return;
+    }
+
+    try {
+      const response = await deleteSocialAccount(authToken, account.id);
+
+      setSocialAccounts(response.accounts);
+      setSaveNotice(`${platformById[platform].label} account disconnected.`);
+    } catch (error) {
+      setSaveNotice(
+        error instanceof ApiError
+          ? error.message
+          : `Unable to disconnect ${platformById[platform].label}.`,
+      );
+    }
   };
 
   const handleGenerateCaption = async () => {
@@ -847,13 +971,13 @@ export const PostPanel = ({ authToken }: Props) => {
     setQueueMonth((current) => new Date(current.getFullYear(), current.getMonth() + monthOffset, 1));
   };
 
-  const setScheduledPostUpdating = (postId: string, updating: boolean) => {
+  const setScheduledPostUpdating = useCallback((postId: string, updating: boolean) => {
     setUpdatingScheduledPostIds((current) =>
       updating
         ? [...new Set([...current, postId])]
         : current.filter((id) => id !== postId),
     );
-  };
+  }, []);
 
   const handleRemoveScheduledPost = async (post: ScheduledSocialPost) => {
     if (!canEditScheduledPost(post)) {
@@ -879,7 +1003,7 @@ export const PostPanel = ({ authToken }: Props) => {
     }
   };
 
-  const handleReschedulePost = async (post: ScheduledSocialPost, date: Date) => {
+  const handleReschedulePost = useCallback(async (post: ScheduledSocialPost, date: Date) => {
     if (!canEditScheduledPost(post)) {
       setSaveNotice("Published or publishing posts cannot be moved.");
       return;
@@ -916,7 +1040,7 @@ export const PostPanel = ({ authToken }: Props) => {
     } finally {
       setScheduledPostUpdating(post.id, false);
     }
-  };
+  }, [authToken, setScheduledPostUpdating, userTimezone]);
 
   const handleScheduledPostDragStart = (
     event: DragEvent<HTMLElement>,
@@ -967,14 +1091,49 @@ export const PostPanel = ({ authToken }: Props) => {
     event.currentTarget.setPointerCapture(event.pointerId);
   };
 
-  const validateScheduleContent = () => {
+  useEffect(() => {
+    if (!draggedScheduledPostId) {
+      return undefined;
+    }
+
+    const handlePointerMove = (event: globalThis.PointerEvent) => {
+      setScheduledDragPoint({ x: event.clientX, y: event.clientY });
+    };
+
+    const handlePointerUp = (event: globalThis.PointerEvent) => {
+      const post = scheduledPosts.find((item) => item.id === draggedScheduledPostId);
+      const dropTarget = document
+        .elementFromPoint(event.clientX, event.clientY)
+        ?.closest<HTMLElement>("[data-post-calendar-day]");
+      const day = calendarDays.find((item) => item.key === dropTarget?.dataset.postCalendarDay);
+
+      setDraggedScheduledPostId(null);
+      setScheduledDragPoint(null);
+
+      if (!post || !day || getLocalDateKey(new Date(post.scheduledFor)) === day.key) {
+        return;
+      }
+
+      void handleReschedulePost(post, mergeDateWithPostTime(day.date, post));
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+  }, [calendarDays, draggedScheduledPostId, handleReschedulePost, scheduledPosts]);
+
+  const validatePostContent = (action: "scheduling" | "publishing") => {
     if (!selectedPlatforms.length) {
-      setSaveNotice("Select at least one platform before scheduling.");
+      setSaveNotice(`Select at least one platform before ${action}.`);
       return false;
     }
 
     if (!masterCaption.trim() && !postImage) {
-      setSaveNotice("Add a caption or image before scheduling.");
+      setSaveNotice(`Add a caption or image before ${action}.`);
       return false;
     }
 
@@ -982,7 +1141,7 @@ export const PostPanel = ({ authToken }: Props) => {
   };
 
   const handleOpenSchedule = () => {
-    if (!validateScheduleContent()) {
+    if (!validatePostContent("scheduling")) {
       return;
     }
 
@@ -995,14 +1154,64 @@ export const PostPanel = ({ authToken }: Props) => {
     setIsScheduleModalOpen(true);
   };
 
-  const handlePush = () => {
-    setSaveNotice("Immediate publishing is not connected yet. Use Schedule to queue a timed post.");
+  const handlePush = async () => {
+    if (!validatePostContent("publishing")) {
+      return;
+    }
+
+    const missingPlatforms = selectedPlatforms.filter(
+      (platform) => !socialAccountByPlatform[platform]?.connected,
+    );
+
+    if (missingPlatforms.length) {
+      setSaveNotice(
+        `Connect ${missingPlatforms
+          .map((platform) => platformById[platform].label)
+          .join(", ")} before pushing.`,
+      );
+      return;
+    }
+
+    setIsPublishingPost(true);
+
+    try {
+      const thumbnailDataUrl = postImage ? await buildCalendarImageThumbnail(postImage.url) : null;
+      const response = await publishSocialPosts(authToken, {
+        posts: selectedPlatforms.map((platform) => ({
+          platform,
+          caption: (drafts[platform].caption || masterCaption).trim(),
+        })),
+        imageDataUrl: postImage?.url ?? null,
+        imageName: postImage?.name ?? null,
+        thumbnailDataUrl,
+        timezone: userTimezone,
+      });
+      const publishedCount = response.publishedPosts.filter(
+        (post) => post.status === "published",
+      ).length;
+      const failedCount = response.publishedPosts.length - publishedCount;
+
+      setScheduledPosts(response.posts);
+      setSaveNotice(
+        failedCount
+          ? `${publishedCount} published, ${failedCount} need attention in the queue.`
+          : `${publishedCount} platform post${publishedCount === 1 ? "" : "s"} published.`,
+      );
+    } catch (error) {
+      setSaveNotice(
+        error instanceof ApiError
+          ? error.message
+          : "Unable to publish the selected posts.",
+      );
+    } finally {
+      setIsPublishingPost(false);
+    }
   };
 
   const handleScheduleSubmit = async () => {
     const scheduledDate = new Date(scheduleAt);
 
-    if (!validateScheduleContent()) {
+    if (!validatePostContent("scheduling")) {
       return;
     }
 
@@ -1064,11 +1273,15 @@ export const PostPanel = ({ authToken }: Props) => {
             <div className="sidebar-section__label">Social publisher</div>
             <h1 className="post-title">Build OpsUI social posts</h1>
             <p className="post-subtitle">
-              Generate caption strategy and portrait creative, then stage the post for
+              Generate caption strategy and portrait creative, then publish the post to
               Facebook, LinkedIn, X/Twitter, and Instagram.
             </p>
           </div>
-          <div className="post-hero__pill">Accounts not connected</div>
+          <div className="post-hero__pill">
+            {isSocialAccountsLoading
+              ? "Checking accounts"
+              : `${connectedPlatformCount}/${platformIds.length} accounts connected`}
+          </div>
         </div>
 
         <div className="post-layout">
@@ -1201,6 +1414,50 @@ export const PostPanel = ({ authToken }: Props) => {
               <div className="post-field-meta">
                 {selectedPlatforms.length} of {platformIds.length} selected
               </div>
+              <div className="post-account-list">
+                {socialPlatforms.map((platform) => {
+                  const account = socialAccountByPlatform[platform.id];
+                  const connected = Boolean(account?.connected);
+
+                  return (
+                    <div
+                      className={`post-account-row ${connected ? "post-account-row--connected" : ""}`}
+                      key={platform.id}
+                    >
+                      <div className="post-account-row__main">
+                        <span className="post-account-mark">{platform.shortLabel}</span>
+                        <div>
+                          <strong>{account?.displayName ?? platform.label}</strong>
+                          <small>{account?.accountId ?? "No posting target"}</small>
+                        </div>
+                      </div>
+                      <div className="post-account-row__side">
+                        <span className="post-account-status">
+                          {connected ? "Connected" : "Not connected"}
+                        </span>
+                        {canManageSocialAccounts ? (
+                          <div className="post-account-actions">
+                            <button
+                              onClick={() => openSocialAccountDialog(platform.id)}
+                              type="button"
+                            >
+                              {connected ? "Edit" : "Connect"}
+                            </button>
+                            {connected && account?.source === "database" ? (
+                              <button
+                                onClick={() => void handleDisconnectSocialAccount(platform.id)}
+                                type="button"
+                              >
+                                Disconnect
+                              </button>
+                            ) : null}
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
             </section>
           </div>
 
@@ -1311,7 +1568,7 @@ export const PostPanel = ({ authToken }: Props) => {
             <div className="post-schedule-actions">
               <button
                 className="post-schedule-btn"
-                disabled={!selectedPlatforms.length || isSchedulingPost}
+                disabled={!selectedPlatforms.length || isSchedulingPost || isPublishingPost}
                 onClick={handleOpenSchedule}
                 type="button"
               >
@@ -1319,11 +1576,11 @@ export const PostPanel = ({ authToken }: Props) => {
               </button>
               <button
                 className="post-push-btn"
-                disabled={!selectedPlatforms.length}
-                onClick={handlePush}
+                disabled={!selectedPlatforms.length || isPublishingPost || isSchedulingPost}
+                onClick={() => void handlePush()}
                 type="button"
               >
-                Push
+                {isPublishingPost ? "Pushing..." : "Push"}
               </button>
             </div>
           </div>
@@ -1596,6 +1853,114 @@ export const PostPanel = ({ authToken }: Props) => {
         </div>
       ) : null}
 
+      {connectPlatform ? (
+        <div
+          className="post-account-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="post-account-title"
+        >
+          <div className="post-schedule-modal__backdrop" onClick={closeSocialAccountDialog} />
+          <section className="post-account-dialog">
+            <div className="post-schedule-dialog__header">
+              <div>
+                <span className="eyebrow">Account connection</span>
+                <h2 id="post-account-title">{platformById[connectPlatform].label}</h2>
+              </div>
+              <button
+                className="post-schedule-dialog__close"
+                onClick={closeSocialAccountDialog}
+                type="button"
+                aria-label="Close account connection dialog"
+              >
+                x
+              </button>
+            </div>
+
+            <div className="post-account-form">
+              <label>
+                Display name
+                <input
+                  maxLength={120}
+                  onChange={(event) =>
+                    setAccountForm((current) => ({
+                      ...current,
+                      displayName: event.target.value,
+                    }))
+                  }
+                  value={accountForm.displayName}
+                />
+              </label>
+              <label>
+                Posting target ID
+                <input
+                  maxLength={240}
+                  onChange={(event) =>
+                    setAccountForm((current) => ({
+                      ...current,
+                      accountId: event.target.value,
+                    }))
+                  }
+                  placeholder={
+                    connectPlatform === "linkedin"
+                      ? "urn:li:organization:123456"
+                      : connectPlatform === "twitter"
+                        ? "@opsui"
+                        : "Platform account ID"
+                  }
+                  value={accountForm.accountId}
+                />
+              </label>
+              <label>
+                Access token
+                <input
+                  maxLength={8000}
+                  onChange={(event) =>
+                    setAccountForm((current) => ({
+                      ...current,
+                      accessToken: event.target.value,
+                    }))
+                  }
+                  type="password"
+                  value={accountForm.accessToken}
+                />
+              </label>
+              <label>
+                Token expiry
+                <input
+                  onChange={(event) =>
+                    setAccountForm((current) => ({
+                      ...current,
+                      expiresAt: event.target.value,
+                    }))
+                  }
+                  type="datetime-local"
+                  value={accountForm.expiresAt}
+                />
+              </label>
+            </div>
+
+            <div className="post-schedule-dialog__actions">
+              <button
+                className="post-schedule-cancel"
+                onClick={closeSocialAccountDialog}
+                type="button"
+              >
+                Cancel
+              </button>
+              <button
+                className="post-schedule-confirm"
+                disabled={isSavingSocialAccount}
+                onClick={() => void handleSaveSocialAccount()}
+                type="button"
+              >
+                {isSavingSocialAccount ? "Saving..." : "Save account"}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
+
       {isScheduleModalOpen ? (
         <div
           className="post-schedule-modal"
@@ -1668,8 +2033,8 @@ export const PostPanel = ({ authToken }: Props) => {
 
             <p>
               Scheduled posts are stored in the shared OpsUI queue. When the publish
-              time arrives, the server will attempt to send them through the connected
-              publishing service.
+              time arrives, the server will send them through connected platform
+              accounts.
             </p>
           </section>
         </div>

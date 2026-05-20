@@ -6,6 +6,7 @@ import type {
   DbAiMeetingGuideRow,
   DbMeetingRequestRow,
   DbMeetingRow,
+  DbSocialPlatform,
   DbUserRow,
 } from "../types.js";
 import type {
@@ -13,6 +14,7 @@ import type {
   DbMeetingWithAssignmentRow,
   DbPastMeetingWithAssignmentRow,
   DbScheduledSocialPostWithCreatorRow,
+  DbSocialAccountWithCreatorRow,
   ReplaceMeetingsResult,
   StorageAdapter,
 } from "./adapter.js";
@@ -25,6 +27,7 @@ const syncStateTable = `${schemaName}.sync_state`;
 const aiMeetingGuidesTable = `${schemaName}.ai_meeting_guides`;
 const meetingRequestsTable = `${schemaName}.meeting_requests`;
 const scheduledSocialPostsTable = `${schemaName}.scheduled_social_posts`;
+const socialAccountsTable = `${schemaName}.social_accounts`;
 
 const schemaSql = `
   CREATE SCHEMA IF NOT EXISTS ${schemaName};
@@ -140,6 +143,25 @@ const schemaSql = `
 
   CREATE INDEX IF NOT EXISTS idx_scheduled_social_posts_due
     ON ${scheduledSocialPostsTable}(status, scheduled_for);
+
+  CREATE TABLE IF NOT EXISTS ${socialAccountsTable} (
+    id TEXT PRIMARY KEY,
+    platform TEXT NOT NULL UNIQUE CHECK(platform IN ('facebook', 'linkedin', 'twitter', 'instagram')),
+    display_name TEXT NOT NULL,
+    account_id TEXT NOT NULL,
+    access_token TEXT NOT NULL,
+    token_type TEXT,
+    expires_at TEXT,
+    scopes TEXT,
+    metadata_json TEXT NOT NULL DEFAULT '{}',
+    active SMALLINT NOT NULL DEFAULT 1,
+    created_by_user_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_social_accounts_platform
+    ON ${socialAccountsTable}(platform, active);
 `;
 
 const selectActiveMeetingsQuery = `
@@ -166,6 +188,14 @@ const selectScheduledSocialPostsQuery = `
     users.display_name AS created_by_user_name
   FROM ${scheduledSocialPostsTable} AS scheduled_social_posts
   LEFT JOIN ${usersTable} AS users ON users.id = scheduled_social_posts.created_by_user_id
+`;
+
+const selectSocialAccountsQuery = `
+  SELECT
+    social_accounts.*,
+    users.display_name AS created_by_user_name
+  FROM ${socialAccountsTable} AS social_accounts
+  LEFT JOIN ${usersTable} AS users ON users.id = social_accounts.created_by_user_id
 `;
 
 const buildWhereClause = (
@@ -792,6 +822,13 @@ export const createPostgresAdapter = (): StorageAdapter => {
       );
     },
 
+    async findScheduledSocialPostById(id) {
+      return queryRow<DbScheduledSocialPostWithCreatorRow>(
+        `${selectScheduledSocialPostsQuery} WHERE scheduled_social_posts.id = $1 LIMIT 1`,
+        [id],
+      );
+    },
+
     async listDueScheduledSocialPosts(nowIso, limit) {
       return queryRows<DbScheduledSocialPostWithCreatorRow>(
         `${selectScheduledSocialPostsQuery}
@@ -865,6 +902,82 @@ export const createPostgresAdapter = (): StorageAdapter => {
         `${selectScheduledSocialPostsQuery} WHERE scheduled_social_posts.id = $1 LIMIT 1`,
         [id],
       );
+    },
+
+    async upsertSocialAccount(row) {
+      await execute(
+        `
+          INSERT INTO ${socialAccountsTable} (
+            id,
+            platform,
+            display_name,
+            account_id,
+            access_token,
+            token_type,
+            expires_at,
+            scopes,
+            metadata_json,
+            active,
+            created_by_user_id,
+            created_at,
+            updated_at
+          ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7,
+            $8, $9, $10, $11, $12, $13
+          )
+          ON CONFLICT(platform) DO UPDATE SET
+            display_name = EXCLUDED.display_name,
+            account_id = EXCLUDED.account_id,
+            access_token = EXCLUDED.access_token,
+            token_type = EXCLUDED.token_type,
+            expires_at = EXCLUDED.expires_at,
+            scopes = EXCLUDED.scopes,
+            metadata_json = EXCLUDED.metadata_json,
+            active = EXCLUDED.active,
+            created_by_user_id = EXCLUDED.created_by_user_id,
+            updated_at = EXCLUDED.updated_at
+        `,
+        [
+          row.id,
+          row.platform,
+          row.display_name,
+          row.account_id,
+          row.access_token,
+          row.token_type,
+          row.expires_at,
+          row.scopes,
+          row.metadata_json,
+          row.active,
+          row.created_by_user_id,
+          row.created_at,
+          row.updated_at,
+        ],
+      );
+    },
+
+    async listSocialAccounts() {
+      return queryRows<DbSocialAccountWithCreatorRow>(
+        `${selectSocialAccountsQuery}
+         WHERE social_accounts.active = 1
+         ORDER BY social_accounts.platform ASC`,
+      );
+    },
+
+    async findSocialAccountByPlatform(platform: DbSocialPlatform) {
+      return queryRow<DbSocialAccountWithCreatorRow>(
+        `${selectSocialAccountsQuery}
+         WHERE social_accounts.platform = $1
+           AND social_accounts.active = 1
+         LIMIT 1`,
+        [platform],
+      );
+    },
+
+    async deleteSocialAccount(id) {
+      const result = await execute(`DELETE FROM ${socialAccountsTable} WHERE id = $1`, [
+        id,
+      ]);
+      return (result.rowCount ?? 0) > 0;
     },
   };
 };

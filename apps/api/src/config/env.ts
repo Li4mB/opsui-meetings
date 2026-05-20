@@ -62,6 +62,11 @@ const dbProvider =
   (dbUrl ? "postgres" : "sqlite");
 
 const isRender = process.env.RENDER === "true";
+const renderExternalUrl =
+  process.env.RENDER_EXTERNAL_URL?.trim() ||
+  (process.env.RENDER_EXTERNAL_HOSTNAME?.trim()
+    ? `https://${process.env.RENDER_EXTERNAL_HOSTNAME.trim()}`
+    : "");
 
 const defaultSqliteDbPath = isRender
   ? "/var/data/opsui-meetings.sqlite"
@@ -103,6 +108,23 @@ export const env = {
   makeMeetingRequestWebhookUrl:
     process.env.OPSUI_MAKE_MEETING_REQUEST_WEBHOOK_URL ?? "",
   socialPublishWebhookUrl: process.env.OPSUI_SOCIAL_PUBLISH_WEBHOOK_URL ?? "",
+  socialPublicApiUrl:
+    process.env.OPSUI_PUBLIC_API_URL?.trim() || renderExternalUrl,
+  metaGraphApiVersion: process.env.OPSUI_META_GRAPH_API_VERSION ?? "v24.0",
+  linkedinApiVersion: process.env.OPSUI_LINKEDIN_API_VERSION ?? "202601",
+  facebookPageId: process.env.OPSUI_FACEBOOK_PAGE_ID ?? "",
+  facebookPageAccessToken:
+    process.env.OPSUI_FACEBOOK_PAGE_ACCESS_TOKEN ?? "",
+  instagramUserId: process.env.OPSUI_INSTAGRAM_USER_ID ?? "",
+  instagramAccessToken: process.env.OPSUI_INSTAGRAM_ACCESS_TOKEN ?? "",
+  linkedinAuthorUrn:
+    process.env.OPSUI_LINKEDIN_AUTHOR_URN ||
+    (process.env.OPSUI_LINKEDIN_ORGANIZATION_ID
+      ? `urn:li:organization:${process.env.OPSUI_LINKEDIN_ORGANIZATION_ID}`
+      : ""),
+  linkedinAccessToken: process.env.OPSUI_LINKEDIN_ACCESS_TOKEN ?? "",
+  xAccountId: process.env.OPSUI_X_ACCOUNT_ID ?? "",
+  xAccessToken: process.env.OPSUI_X_ACCESS_TOKEN ?? "",
   dbProvider,
   dbUrl,
   dbSsl: parseBoolean(process.env.OPSUI_DB_SSL, dbProvider === "postgres"),

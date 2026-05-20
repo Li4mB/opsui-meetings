@@ -6,6 +6,8 @@ import type {
   DbPastMeetingRow,
   DbScheduledSocialPostRow,
   DbScheduledSocialPostStatus,
+  DbSocialAccountRow,
+  DbSocialPlatform,
   DbUserRow,
 } from "../types.js";
 
@@ -27,6 +29,10 @@ export type DbPastMeetingWithAssignmentRow = DbPastMeetingRow & {
 };
 
 export type DbScheduledSocialPostWithCreatorRow = DbScheduledSocialPostRow & {
+  created_by_user_name: string | null;
+};
+
+export type DbSocialAccountWithCreatorRow = DbSocialAccountRow & {
   created_by_user_name: string | null;
 };
 
@@ -71,6 +77,9 @@ export interface StorageAdapter {
   deleteMeetingRequestById(id: string): Promise<void>;
   insertScheduledSocialPosts(rows: DbScheduledSocialPostRow[]): Promise<void>;
   listScheduledSocialPosts(): Promise<DbScheduledSocialPostWithCreatorRow[]>;
+  findScheduledSocialPostById(
+    id: string,
+  ): Promise<DbScheduledSocialPostWithCreatorRow | null>;
   listDueScheduledSocialPosts(
     nowIso: string,
     limit: number,
@@ -90,4 +99,10 @@ export interface StorageAdapter {
       publishedAt?: string | null;
     },
   ): Promise<DbScheduledSocialPostWithCreatorRow | null>;
+  upsertSocialAccount(row: DbSocialAccountRow): Promise<void>;
+  listSocialAccounts(): Promise<DbSocialAccountWithCreatorRow[]>;
+  findSocialAccountByPlatform(
+    platform: DbSocialPlatform,
+  ): Promise<DbSocialAccountWithCreatorRow | null>;
+  deleteSocialAccount(id: string): Promise<boolean>;
 }
