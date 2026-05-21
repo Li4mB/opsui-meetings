@@ -7,6 +7,7 @@ import { env } from "../config/env.js";
 import type {
   CalendarMeeting,
   DbAiMeetingGuideRow,
+  DbAiPostImageGenerationRow,
   DbMeetingRequestRow,
   DbMeetingRow,
   DbScheduledSocialPostRow,
@@ -103,6 +104,22 @@ const schemaSql = `
     updated_at TEXT NOT NULL,
     FOREIGN KEY (created_by_user_id) REFERENCES users(id)
   );
+
+  CREATE TABLE IF NOT EXISTS ai_post_image_generations (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    caption TEXT,
+    tags_json TEXT NOT NULL,
+    image_name TEXT NOT NULL,
+    image_model TEXT NOT NULL,
+    created_by_user_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (created_by_user_id) REFERENCES users(id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_ai_post_image_generations_context
+    ON ai_post_image_generations(conversation_id, created_by_user_id, created_at DESC);
 
   CREATE TABLE IF NOT EXISTS meeting_requests (
     id TEXT PRIMARY KEY,
@@ -690,6 +707,47 @@ export const createSqliteAdapter = (): StorageAdapter => {
       database
         .prepare("DELETE FROM ai_meeting_guides WHERE google_event_id = ?")
         .run(googleEventId);
+    },
+
+    async insertAiPostImageGeneration(row) {
+      const database = getDb();
+      database.prepare(`
+        INSERT INTO ai_post_image_generations (
+          id,
+          conversation_id,
+          prompt,
+          caption,
+          tags_json,
+          image_name,
+          image_model,
+          created_by_user_id,
+          created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        row.id,
+        row.conversation_id,
+        row.prompt,
+        row.caption,
+        row.tags_json,
+        row.image_name,
+        row.image_model,
+        row.created_by_user_id,
+        row.created_at,
+      );
+    },
+
+    async listRecentAiPostImageGenerations(conversationId, userId, limit) {
+      const database = getDb();
+      return database
+        .prepare<unknown[], DbAiPostImageGenerationRow>(`
+          SELECT *
+          FROM ai_post_image_generations
+          WHERE conversation_id = ?
+            AND created_by_user_id = ?
+          ORDER BY created_at DESC
+          LIMIT ?
+        `)
+        .all(conversationId, userId, limit);
     },
 
     async insertMeetingRequest(row) {

@@ -67,6 +67,23 @@ type PlatformMeta = {
   styleHint: string;
 };
 
+const imageConversationStorageKey = "opsui.postImageConversationId";
+
+const createImageConversationId = () => `post-image-${crypto.randomUUID()}`;
+
+const getInitialImageConversationId = () => {
+  const existing = window.localStorage.getItem(imageConversationStorageKey);
+
+  if (existing) {
+    return existing;
+  }
+
+  const next = createImageConversationId();
+
+  window.localStorage.setItem(imageConversationStorageKey, next);
+  return next;
+};
+
 const socialPlatforms = [
   {
     id: "facebook",
@@ -478,6 +495,9 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
   const [masterCaption, setMasterCaption] = useState("");
   const [captionStrategy, setCaptionStrategy] = useState<AiPostContent | null>(null);
   const [postImage, setPostImage] = useState<PostImage | null>(null);
+  const [imageConversationId, setImageConversationId] = useState(
+    getInitialImageConversationId,
+  );
   const [selectedPlatforms, setSelectedPlatforms] = useState<SocialPlatform[]>([]);
   const [drafts, setDrafts] = useState(createDrafts(""));
   const [isGeneratingCaption, setIsGeneratingCaption] = useState(false);
@@ -828,6 +848,14 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
     }
   };
 
+  const handleResetImageMemory = () => {
+    const next = createImageConversationId();
+
+    window.localStorage.setItem(imageConversationStorageKey, next);
+    setImageConversationId(next);
+    setSaveNotice("Image generation memory reset.");
+  };
+
   const handleGenerateImage = async () => {
     const source = imagePrompt.trim() || captionPrompt.trim() || masterCaption.trim();
 
@@ -843,8 +871,14 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
         prompt: source,
         caption: masterCaption,
         tags: activeHashtags,
+        conversationId: imageConversationId,
       });
 
+      setImageConversationId(generated.conversationId);
+      window.localStorage.setItem(
+        imageConversationStorageKey,
+        generated.conversationId,
+      );
       replaceImage({
         id: `generated-${Date.now()}-${crypto.randomUUID()}`,
         name: generated.fileName,
@@ -852,7 +886,7 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
         generated: true,
         objectUrl: false,
       });
-      setSaveNotice(`Image generated with ${generated.model}.`);
+      setSaveNotice(`Image generated with ${generated.model}. OpsUI reference memory applied.`);
     } catch (error) {
       const svg = buildLocalPosterSvg(source);
 
@@ -1332,14 +1366,24 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
                 />
               </label>
               <div className="post-section-actions">
-                <button
-                  className="post-generate-btn"
-                  disabled={isGeneratingImage}
-                  onClick={() => void handleGenerateImage()}
-                  type="button"
-                >
-                  {isGeneratingImage ? "Generating..." : "Generate image"}
-                </button>
+                <div className="post-section-actions__group">
+                  <button
+                    className="post-generate-btn"
+                    disabled={isGeneratingImage}
+                    onClick={() => void handleGenerateImage()}
+                    type="button"
+                  >
+                    {isGeneratingImage ? "Generating..." : "Generate image"}
+                  </button>
+                  <button
+                    className="post-memory-btn"
+                    disabled={isGeneratingImage}
+                    onClick={handleResetImageMemory}
+                    type="button"
+                  >
+                    Reset memory
+                  </button>
+                </div>
                 <span className="post-field-meta">{imagePrompt.length}/8000</span>
               </div>
 

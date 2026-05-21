@@ -71,11 +71,13 @@ export const aiPostImageRequestSchema = z.object({
   prompt: z.string().min(1).max(8000),
   caption: z.string().max(2200).optional(),
   tags: z.array(z.string()).max(12).default([]),
+  conversationId: z.string().trim().min(1).max(160).optional(),
 });
 
 export const aiPostImageSchema = z.object({
   imageDataUrl: z.string().min(1),
   fileName: z.string().min(1),
+  conversationId: z.string().min(1),
   tags: z.array(z.string()).max(12),
   generatedAt: z.string(),
   model: z.string(),

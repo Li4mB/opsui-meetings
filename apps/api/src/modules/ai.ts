@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import OpenAI, { toFile } from "openai";
 import { zodTextFormat } from "openai/helpers/zod";
+import { nanoid } from "nanoid";
 import {
   aiMeetingGuideContentSchema,
   aiMeetingGuideBindingSchema,
@@ -18,6 +19,7 @@ import { env } from "../config/env.js";
 import { authenticateRequest } from "./auth.js";
 import type {
   DbAiMeetingGuideRow,
+  DbAiPostImageGenerationRow,
 } from "../types.js";
 import type {
   DbMeetingWithAssignmentRow,
@@ -66,13 +68,108 @@ const opsUiLogoReferencePath = path.resolve(
   "assets",
   "opsui-logo-reference.png",
 );
-const opsUiLogoReferenceDataUrl = (() => {
+
+const readAssetDataUrl = (filePath: string, mimeType: string) => {
   try {
-    return `data:image/png;base64,${fs.readFileSync(opsUiLogoReferencePath, "base64")}`;
+    return `data:${mimeType};base64,${fs.readFileSync(filePath, "base64")}`;
   } catch {
     return null;
   }
-})();
+};
+
+const opsUiLogoReferenceDataUrl = readAssetDataUrl(
+  opsUiLogoReferencePath,
+  "image/png",
+);
+
+const opsUiVisualReferences = [
+  {
+    label: "OpsUI app dashboard screenshot from the marketing home page",
+    dataUrl: readAssetDataUrl(
+      path.resolve(env.appRoot, "assets", "opsui-app-home-dashboard-reference.jpg"),
+      "image/jpeg",
+    ),
+  },
+  {
+    label: "OpsUI app order management module screenshot",
+    dataUrl: readAssetDataUrl(
+      path.resolve(env.appRoot, "assets", "opsui-app-module-order-management-reference.jpg"),
+      "image/jpeg",
+    ),
+  },
+  {
+    label: "OpsUI app inventory management module screenshot",
+    dataUrl: readAssetDataUrl(
+      path.resolve(env.appRoot, "assets", "opsui-app-module-inventory-management-reference.jpg"),
+      "image/jpeg",
+    ),
+  },
+  {
+    label: "OpsUI app receiving inbound module screenshot",
+    dataUrl: readAssetDataUrl(
+      path.resolve(env.appRoot, "assets", "opsui-app-module-receiving-inbound-reference.jpg"),
+      "image/jpeg",
+    ),
+  },
+  {
+    label: "OpsUI app shipping outbound module screenshot",
+    dataUrl: readAssetDataUrl(
+      path.resolve(env.appRoot, "assets", "opsui-app-module-shipping-outbound-reference.jpg"),
+      "image/jpeg",
+    ),
+  },
+  {
+    label: "OpsUI app dashboards reporting module screenshot",
+    dataUrl: readAssetDataUrl(
+      path.resolve(env.appRoot, "assets", "opsui-app-module-dashboards-reporting-reference.jpg"),
+      "image/jpeg",
+    ),
+  },
+  {
+    label: "OpsUI app cycle counting module screenshot",
+    dataUrl: readAssetDataUrl(
+      path.resolve(env.appRoot, "assets", "opsui-app-module-cycle-counting-reference.jpg"),
+      "image/jpeg",
+    ),
+  },
+  {
+    label: "OpsUI app wave picking module screenshot",
+    dataUrl: readAssetDataUrl(
+      path.resolve(env.appRoot, "assets", "opsui-app-module-wave-picking-reference.jpg"),
+      "image/jpeg",
+    ),
+  },
+  {
+    label: "OpsUI app zone picking module screenshot",
+    dataUrl: readAssetDataUrl(
+      path.resolve(env.appRoot, "assets", "opsui-app-module-zone-picking-reference.jpg"),
+      "image/jpeg",
+    ),
+  },
+  {
+    label: "OpsUI app slotting optimisation module screenshot",
+    dataUrl: readAssetDataUrl(
+      path.resolve(env.appRoot, "assets", "opsui-app-module-slotting-optimization-reference.jpg"),
+      "image/jpeg",
+    ),
+  },
+  {
+    label: "OpsUI app route optimisation module screenshot",
+    dataUrl: readAssetDataUrl(
+      path.resolve(env.appRoot, "assets", "opsui-app-module-route-optimization-reference.jpg"),
+      "image/jpeg",
+    ),
+  },
+  {
+    label: "OpsUI app returns management module screenshot",
+    dataUrl: readAssetDataUrl(
+      path.resolve(env.appRoot, "assets", "opsui-app-module-returns-management-reference.jpg"),
+      "image/jpeg",
+    ),
+  },
+].filter((reference): reference is { label: string; dataUrl: string } =>
+  Boolean(reference.dataUrl),
+);
 
 const formatMeetingContext = (meeting: ReturnType<typeof toMeeting>) =>
   [
@@ -147,6 +244,149 @@ const opsUiLogoDirection = [
   "If accurate logo placement is not possible, omit the logo instead of creating an incorrect logo.",
 ].join("\n");
 
+const opsUiUiReferenceDirection = [
+  "OpsUI UI reference rule: if the image includes any app screen, dashboard, module view, chart, table, navigation, panel, metric card, or other interface element, derive it only from the attached OpsUI app screenshots.",
+  "The screenshots are real OpsUI app UI from opsui.app, hosted on the OpsUI marketing site at opsui.au under the main dashboard section and module pages.",
+  "Do not invent fake OpsUI product screens, fake dashboards, fake tables, fake metrics, fake menu items, fake module layouts, or fake UI copy that is not supported by the attached app screenshots.",
+  "Use the dashboard screenshot for dashboard/KPI/reporting visuals. Use the specific module screenshots for order, inventory, receiving, shipping, cycle counting, wave picking, zone picking, slotting, routing, and returns visuals.",
+  "If the concept needs UI but no matching OpsUI app screenshot exists, avoid UI and create a brand-safe operational poster, warehouse/process scene, product-message graphic, or logo-led composition instead.",
+].join("\n");
+
+const opsUiAppReferenceUrls = [
+  "https://opsui.app/",
+];
+
+const opsUiScreenshotSourceUrls = [
+  "https://opsui.au/",
+  "https://opsui.au/modules/order-management",
+  "https://opsui.au/modules/inventory-management",
+  "https://opsui.au/modules/receiving-inbound",
+  "https://opsui.au/modules/shipping-outbound",
+  "https://opsui.au/modules/dashboards-reporting",
+  "https://opsui.au/modules/cycle-counting",
+  "https://opsui.au/modules/wave-picking",
+  "https://opsui.au/modules/zone-picking",
+  "https://opsui.au/modules/slotting-optimization",
+  "https://opsui.au/modules/route-optimization",
+  "https://opsui.au/modules/returns-management",
+];
+
+const fallbackOpsUiAppContext = [
+  "OpsUI app source: https://opsui.app/",
+  "OpsUI is an enterprise resource planning system with operational modules for order management, inventory, receiving/inbound, shipping/outbound, dashboards/reporting, cycle counting, wave picking, zone picking, slotting optimisation, route optimisation, and returns management.",
+  "Use OpsUI app screenshots from the marketing module pages as visual evidence for real UI patterns. Treat opsui.au only as the screenshot host, not as permission to invent marketing-page UI inside product screenshots.",
+  `Screenshot source pages: ${opsUiScreenshotSourceUrls.join(", ")}`,
+].join("\n");
+
+let opsUiAppContextCache:
+  | { fetchedAt: number; context: string }
+  | null = null;
+
+const trimForPrompt = (value: string, maxLength: number) =>
+  value.length > maxLength ? `${value.slice(0, maxLength - 1)}...` : value;
+
+const parseGenerationTags = (tagsJson: string) => {
+  try {
+    const tags = JSON.parse(tagsJson) as unknown;
+
+    return Array.isArray(tags)
+      ? tags.filter((tag): tag is string => typeof tag === "string")
+      : [];
+  } catch {
+    return [];
+  }
+};
+
+const stripHtmlToText = (html: string) =>
+  html
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&mdash;|&#8212;/g, "-")
+    .replace(/&ndash;|&#8211;/g, "-")
+    .replace(/&rsquo;|&#8217;/g, "'")
+    .replace(/&lsquo;|&#8216;/g, "'")
+    .replace(/&quot;|&#34;/g, '"')
+    .replace(/\s+/g, " ")
+    .trim();
+
+const fetchOpsUiAppContext = async () => {
+  const now = Date.now();
+
+  if (
+    opsUiAppContextCache &&
+    now - opsUiAppContextCache.fetchedAt < 1000 * 60 * 60 * 6
+  ) {
+    return opsUiAppContextCache.context;
+  }
+
+  const settledPages = await Promise.allSettled(
+    opsUiAppReferenceUrls.map(async (url) => {
+      const response = await fetch(url, {
+        headers: {
+          "User-Agent": "OpsUI social image app reference fetcher",
+        },
+        signal: AbortSignal.timeout(5000),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Could not fetch ${url} (${response.status})`);
+      }
+
+      return `Source: ${url}\n${trimForPrompt(stripHtmlToText(await response.text()), 3000)}`;
+    }),
+  );
+
+  const fetchedContext = settledPages
+    .filter(
+      (result): result is PromiseFulfilledResult<string> =>
+        result.status === "fulfilled" && result.value.length > 0,
+    )
+    .map((result) => result.value)
+    .join("\n\n");
+  const context = [
+    fetchedContext || fallbackOpsUiAppContext,
+    `OpsUI app screenshot source pages:\n${opsUiScreenshotSourceUrls.join("\n")}`,
+  ].join("\n\n");
+
+  opsUiAppContextCache = {
+    fetchedAt: now,
+    context: trimForPrompt(context, 9000),
+  };
+
+  return opsUiAppContextCache.context;
+};
+
+const formatImageGenerationHistory = (
+  recentGenerations: DbAiPostImageGenerationRow[],
+) => {
+  if (!recentGenerations.length) {
+    return "";
+  }
+
+  return recentGenerations
+    .slice()
+    .reverse()
+    .map((generation, index) => {
+      const tags = parseGenerationTags(generation.tags_json);
+
+      return [
+        `${index + 1}. ${generation.created_at}`,
+        `Prompt: ${trimForPrompt(generation.prompt, 420)}`,
+        generation.caption
+          ? `Caption: ${trimForPrompt(generation.caption, 280)}`
+          : "",
+        tags.length ? `Tags: ${tags.join(", ")}` : "",
+        `Result: ${generation.image_name} via ${generation.image_model}`,
+      ]
+        .filter(Boolean)
+        .join("\n");
+    })
+    .join("\n\n");
+};
+
 const captionStrategistPrompt = [
   "Act as a senior social media strategist and copywriter.",
   "",
@@ -204,19 +444,34 @@ const buildImagePrompt = (input: {
   prompt: string;
   caption?: string;
   tags: string[];
+  appContext: string;
+  recentGenerations: DbAiPostImageGenerationRow[];
 }) =>
   [
     "Create one premium portrait social media image for OpsUI based on the user prompt.",
     "Use creative freedom. The image should feel like a serious, modern WMS/ERP campaign asset, not a generic template.",
-    "Visual direction: dark premium SaaS/operations aesthetic, clear hierarchy, practical warehouse/ERP/WMS context, crisp UI realism, controlled contrast, clean modern typography, and one dominant message if text is used.",
+    "Visual direction: premium SaaS/operations aesthetic, clear hierarchy, practical warehouse/ERP/WMS context, controlled contrast, clean modern typography, and one dominant message if text is used.",
     "Do not paste the full prompt into the image. Use only short, intentional poster copy when useful.",
     "Avoid childish visuals, fake hype, clutter, irrelevant stock imagery, and unreadable text.",
+    "",
+    "UI reference direction:",
+    opsUiUiReferenceDirection,
     "",
     "Logo direction:",
     opsUiLogoDirection,
     "",
     "Fixed OpsUI social direction:",
     opsUiSocialDirection,
+    "",
+    "OpsUI app context:",
+    input.appContext,
+    "",
+    input.recentGenerations.length
+      ? `Recent image generation context:\n${formatImageGenerationHistory(input.recentGenerations)}`
+      : "",
+    input.recentGenerations.length
+      ? "Use the recent context to keep continuity in campaign language, visual direction, and avoided mistakes, while still following the latest user prompt."
+      : "",
     "",
     `User prompt:\n${input.prompt}`,
     input.caption ? `Caption context:\n${input.caption}` : "",
@@ -297,6 +552,18 @@ const buildResponsesImageInput = (prompt: string) => {
     });
   }
 
+  for (const reference of opsUiVisualReferences) {
+    userContent.push({
+      type: "input_text",
+      text: `Visual reference: ${reference.label}. Use this only as OpsUI app UI reference.`,
+    });
+    userContent.push({
+      type: "input_image",
+      image_url: reference.dataUrl,
+      detail: "high",
+    });
+  }
+
   return [
     {
       role: "developer" as const,
@@ -306,6 +573,9 @@ const buildResponsesImageInput = (prompt: string) => {
           text: [
             "Use the image_generation tool to create one premium portrait social media image for OpsUI.",
             "Use the attached OP logo reference whenever the output needs a logo or brand mark.",
+            "Use the attached OpsUI app screenshots whenever the output needs any UI, dashboard, module view, chart, table, metric card, navigation, typography, or layout reference.",
+            "The app is opsui.app; the screenshots are hosted on opsui.au module pages.",
+            "If accurate UI cannot be derived from the references, omit UI instead of inventing screens.",
             "Return the generated image only.",
           ].join(" "),
         },
@@ -514,8 +784,20 @@ export const registerAiRoutes = (app: import("fastify").FastifyInstance) => {
         });
       }
 
+      if (!request.user) {
+        return reply.unauthorized("Missing authenticated user");
+      }
+
       const input = aiPostImageRequestSchema.parse(request.body);
       const tags = normalizeTags(input.tags);
+      const conversationId =
+        input.conversationId?.trim() || `post-image-${request.user.id}`;
+      const recentGenerations = await storage.listRecentAiPostImageGenerations(
+        conversationId,
+        request.user.id,
+        6,
+      );
+      const appContext = await fetchOpsUiAppContext();
 
       let generatedImage: Awaited<ReturnType<typeof generatePostImageWithFallback>>;
 
@@ -525,6 +807,8 @@ export const registerAiRoutes = (app: import("fastify").FastifyInstance) => {
             prompt: input.prompt,
             caption: input.caption,
             tags,
+            appContext,
+            recentGenerations,
           }),
         );
       } catch (error) {
@@ -538,12 +822,27 @@ export const registerAiRoutes = (app: import("fastify").FastifyInstance) => {
           message: `OpenAI image generation failed: ${message}`,
         });
       }
+      const generatedAt = new Date().toISOString();
+      const fileName = `opsui-post-${Date.now()}.${generatedImage.fileExtension}`;
+
+      await storage.insertAiPostImageGeneration({
+        id: nanoid(),
+        conversation_id: conversationId,
+        prompt: input.prompt,
+        caption: input.caption ?? null,
+        tags_json: JSON.stringify(tags),
+        image_name: fileName,
+        image_model: generatedImage.model,
+        created_by_user_id: request.user.id,
+        created_at: generatedAt,
+      });
 
       return aiPostImageSchema.parse({
         imageDataUrl: `data:${generatedImage.mimeType};base64,${generatedImage.imageData}`,
-        fileName: `opsui-post-${Date.now()}.${generatedImage.fileExtension}`,
+        fileName,
+        conversationId,
         tags,
-        generatedAt: new Date().toISOString(),
+        generatedAt,
         model: generatedImage.model,
       });
     },

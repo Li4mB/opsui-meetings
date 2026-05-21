@@ -54,6 +54,18 @@ export type DbAiMeetingGuideRow = {
   updated_at: string;
 };
 
+export type DbAiPostImageGenerationRow = {
+  id: string;
+  conversation_id: string;
+  prompt: string;
+  caption: string | null;
+  tags_json: string;
+  image_name: string;
+  image_model: string;
+  created_by_user_id: string;
+  created_at: string;
+};
+
 export type DbMeetingRequestRow = {
   id: string;
   client_name: string;

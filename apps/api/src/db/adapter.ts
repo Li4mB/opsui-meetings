@@ -1,6 +1,7 @@
 import type {
   CalendarMeeting,
   DbAiMeetingGuideRow,
+  DbAiPostImageGenerationRow,
   DbMeetingRequestRow,
   DbMeetingRow,
   DbPastMeetingRow,
@@ -72,6 +73,12 @@ export interface StorageAdapter {
   ): Promise<DbAiMeetingGuideRow | null>;
   upsertAiMeetingGuide(row: DbAiMeetingGuideRow): Promise<void>;
   deleteAiMeetingGuideByGoogleEventId(googleEventId: string): Promise<void>;
+  insertAiPostImageGeneration(row: DbAiPostImageGenerationRow): Promise<void>;
+  listRecentAiPostImageGenerations(
+    conversationId: string,
+    userId: string,
+    limit: number,
+  ): Promise<DbAiPostImageGenerationRow[]>;
   insertMeetingRequest(row: DbMeetingRequestRow): Promise<void>;
   findMeetingRequestById(id: string): Promise<DbMeetingRequestRow | null>;
   deleteMeetingRequestById(id: string): Promise<void>;

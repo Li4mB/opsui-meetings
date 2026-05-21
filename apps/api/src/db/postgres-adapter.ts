@@ -4,6 +4,7 @@ import { nanoid } from "nanoid";
 import { env } from "../config/env.js";
 import type {
   DbAiMeetingGuideRow,
+  DbAiPostImageGenerationRow,
   DbMeetingRequestRow,
   DbMeetingRow,
   DbSocialPlatform,
@@ -25,6 +26,7 @@ const meetingsTable = `${schemaName}.meetings`;
 const pastMeetingsTable = `${schemaName}.past_meetings`;
 const syncStateTable = `${schemaName}.sync_state`;
 const aiMeetingGuidesTable = `${schemaName}.ai_meeting_guides`;
+const aiPostImageGenerationsTable = `${schemaName}.ai_post_image_generations`;
 const meetingRequestsTable = `${schemaName}.meeting_requests`;
 const scheduledSocialPostsTable = `${schemaName}.scheduled_social_posts`;
 const socialAccountsTable = `${schemaName}.social_accounts`;
@@ -105,6 +107,21 @@ const schemaSql = `
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS ${aiPostImageGenerationsTable} (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    caption TEXT,
+    tags_json TEXT NOT NULL,
+    image_name TEXT NOT NULL,
+    image_model TEXT NOT NULL,
+    created_by_user_id TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_ai_post_image_generations_context
+    ON ${aiPostImageGenerationsTable}(conversation_id, created_by_user_id, created_at DESC);
 
   CREATE TABLE IF NOT EXISTS ${meetingRequestsTable} (
     id TEXT PRIMARY KEY,
@@ -711,6 +728,49 @@ export const createPostgresAdapter = (): StorageAdapter => {
       await execute(`DELETE FROM ${aiMeetingGuidesTable} WHERE google_event_id = $1`, [
         googleEventId,
       ]);
+    },
+
+    async insertAiPostImageGeneration(row) {
+      await execute(
+        `
+          INSERT INTO ${aiPostImageGenerationsTable} (
+            id,
+            conversation_id,
+            prompt,
+            caption,
+            tags_json,
+            image_name,
+            image_model,
+            created_by_user_id,
+            created_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        `,
+        [
+          row.id,
+          row.conversation_id,
+          row.prompt,
+          row.caption,
+          row.tags_json,
+          row.image_name,
+          row.image_model,
+          row.created_by_user_id,
+          row.created_at,
+        ],
+      );
+    },
+
+    async listRecentAiPostImageGenerations(conversationId, userId, limit) {
+      return queryRows<DbAiPostImageGenerationRow>(
+        `
+          SELECT *
+          FROM ${aiPostImageGenerationsTable}
+          WHERE conversation_id = $1
+            AND created_by_user_id = $2
+          ORDER BY created_at DESC
+          LIMIT $3
+        `,
+        [conversationId, userId, limit],
+      );
     },
 
     async insertMeetingRequest(row) {

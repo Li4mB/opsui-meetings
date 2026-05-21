@@ -14,6 +14,7 @@ import { createSqliteAdapter } from "../db/sqlite-adapter.js";
 import type { StorageAdapter } from "../db/adapter.js";
 import type {
   CalendarMeeting,
+  DbAiPostImageGenerationRow,
   DbScheduledSocialPostRow,
   DbSocialAccountRow,
   DbUserRow,
@@ -176,6 +177,41 @@ describe("4. AI Guides", () => {
   it("delete", async () => {
     await adapter.deleteAiMeetingGuideByGoogleEventId("g1");
     assert.equal(await adapter.getAiMeetingGuideByGoogleEventId("g1"), null);
+  });
+  it("stores recent post image generation memory by conversation", async () => {
+    const now = new Date().toISOString();
+    const row: DbAiPostImageGenerationRow = {
+      id: nanoid(),
+      conversation_id: "post-image-test",
+      prompt: "Create a warehouse stock accuracy campaign image.",
+      caption: "Stock accuracy starts with visible operations.",
+      tags_json: JSON.stringify(["inventory", "warehouse"]),
+      image_name: "opsui-post-test.jpg",
+      image_model: "test-image-model",
+      created_by_user_id: admin.id,
+      created_at: now,
+    };
+
+    await adapter.insertAiPostImageGeneration(row);
+
+    const generations = await adapter.listRecentAiPostImageGenerations(
+      "post-image-test",
+      admin.id,
+      5,
+    );
+
+    assert.equal(generations.length, 1);
+    assert.equal(generations[0].prompt, row.prompt);
+    assert.equal(
+      (
+        await adapter.listRecentAiPostImageGenerations(
+          "another-conversation",
+          admin.id,
+          5,
+        )
+      ).length,
+      0,
+    );
   });
 });
 
