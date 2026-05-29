@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent, PointerEvent } from "react";
 import type {
   AiPostContent,
+  AiPostImageStyle,
   SocialAccount,
   ScheduledSocialPlatform,
   ScheduledSocialPost,
@@ -68,6 +69,36 @@ type PlatformMeta = {
 };
 
 const imageConversationStorageKey = "opsui.postImageConversationId";
+
+const imageStyleStorageKey = "opsui.postImageStyle";
+
+type ImageStyleOption = {
+  id: AiPostImageStyle;
+  label: string;
+  hint: string;
+};
+
+const imageStyles = [
+  {
+    id: "realistic",
+    label: "Realistic",
+    hint: "Real OpsUI app UI from the product screenshots. Portrait WMS/ERP campaign asset.",
+  },
+  {
+    id: "premium",
+    label: "Premium poster",
+    hint: "Square luxury enterprise LinkedIn poster — dark violet gradients, abstract operational geometry, no app UI.",
+  },
+] as const satisfies readonly ImageStyleOption[];
+
+const isImageStyle = (value: string | null): value is AiPostImageStyle =>
+  imageStyles.some((style) => style.id === value);
+
+const getInitialImageStyle = (): AiPostImageStyle => {
+  const existing = window.localStorage.getItem(imageStyleStorageKey);
+
+  return isImageStyle(existing) ? existing : "realistic";
+};
 
 const createImageConversationId = () => `post-image-${crypto.randomUUID()}`;
 
@@ -498,6 +529,9 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
   const [imageConversationId, setImageConversationId] = useState(
     getInitialImageConversationId,
   );
+  const [imageStyle, setImageStyle] = useState<AiPostImageStyle>(
+    getInitialImageStyle,
+  );
   const [selectedPlatforms, setSelectedPlatforms] = useState<SocialPlatform[]>([]);
   const [drafts, setDrafts] = useState(createDrafts(""));
   const [isGeneratingCaption, setIsGeneratingCaption] = useState(false);
@@ -856,6 +890,11 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
     setSaveNotice("Image generation memory reset.");
   };
 
+  const handleSelectImageStyle = (style: AiPostImageStyle) => {
+    setImageStyle(style);
+    window.localStorage.setItem(imageStyleStorageKey, style);
+  };
+
   const handleGenerateImage = async () => {
     const source = imagePrompt.trim() || captionPrompt.trim() || masterCaption.trim();
 
@@ -872,6 +911,7 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
         caption: masterCaption,
         tags: activeHashtags,
         conversationId: imageConversationId,
+        style: imageStyle,
       });
 
       setImageConversationId(generated.conversationId);
@@ -1353,6 +1393,30 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
               <div className="post-section__header">
                 <span className="eyebrow">Image prompt</span>
                 <h2>Create or upload the visual</h2>
+              </div>
+              <div className="post-style-field">
+                <span className="post-style-field__label">Style</span>
+                <div
+                  aria-label="Image style"
+                  className="post-style-picker"
+                  role="group"
+                >
+                  {imageStyles.map((style) => (
+                    <button
+                      aria-pressed={imageStyle === style.id}
+                      className={`post-style-btn ${imageStyle === style.id ? "post-style-btn--active" : ""}`}
+                      disabled={isGeneratingImage}
+                      key={style.id}
+                      onClick={() => handleSelectImageStyle(style.id)}
+                      type="button"
+                    >
+                      {style.label}
+                    </button>
+                  ))}
+                </div>
+                <p className="post-style-hint">
+                  {imageStyles.find((style) => style.id === imageStyle)?.hint}
+                </p>
               </div>
               <label>
                 Image Prompt

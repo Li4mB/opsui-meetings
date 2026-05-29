@@ -14,6 +14,7 @@ import {
   aiPostImageSchema,
   meetingSchema,
 } from "@opsui/shared";
+import type { AiPostImageStyle } from "@opsui/shared";
 import { storage } from "../db/database.js";
 import { env } from "../config/env.js";
 import { authenticateRequest } from "./auth.js";
@@ -238,19 +239,94 @@ const opsUiSocialDirection = [
 ].join("\n");
 
 const opsUiLogoDirection = [
-  "Logo rule: If the generated image includes an OpsUI logo, product logo, brand mark, app icon, watermark, or corner bug, use only the supplied OP logo reference image.",
-  "The correct logo is a square purple background with bold white uppercase OP letters. Keep the mark clean, flat, and readable.",
-  "Do not invent alternate OpsUI marks, do not use the old glowing black OP icon, and do not recolor or distort the OP logo.",
-  "If accurate logo placement is not possible, omit the logo instead of creating an incorrect logo.",
+  "Logo rule (reference-lock): if the image needs an OpsUI logo, product logo, brand mark, app icon, watermark, or corner bug, use only the attached OP logo reference and reproduce it verbatim, pixel-for-pixel.",
+  "Treat the OP logo as a fixed, finished asset that is copied and pasted in as-is, not a mark to be generated or redrawn. Preserve exactly its shape, proportions, colours, hex values, letterforms, and aspect ratio. The mark is a flat square purple background with bold white uppercase OP.",
+  "Do not recolour, restyle, redraw, re-render, re-typeset, crop, rotate, distort, simplify, or add gradients, shadows, or glows. Never use the old glowing black OP icon and never invent an alternate OpsUI mark.",
+  "Place the logo flat, upright, and large enough that no detail has to be re-synthesised. If the logo cannot be reproduced faithfully, omit it instead of creating an altered or incorrect logo.",
 ].join("\n");
 
 const opsUiUiReferenceDirection = [
-  "OpsUI UI reference rule: if the image includes any app screen, dashboard, module view, chart, table, navigation, panel, metric card, or other interface element, derive it only from the attached OpsUI app screenshots.",
-  "The screenshots are real OpsUI app UI from opsui.app, hosted on the OpsUI marketing site at opsui.au under the main dashboard section and module pages.",
-  "Do not invent fake OpsUI product screens, fake dashboards, fake tables, fake metrics, fake menu items, fake module layouts, or fake UI copy that is not supported by the attached app screenshots.",
-  "Use the dashboard screenshot for dashboard/KPI/reporting visuals. Use the specific module screenshots for order, inventory, receiving, shipping, cycle counting, wave picking, zone picking, slotting, routing, and returns visuals.",
-  "If the concept needs UI but no matching OpsUI app screenshot exists, avoid UI and create a brand-safe operational poster, warehouse/process scene, product-message graphic, or logo-led composition instead.",
+  "OpsUI UI reference rule (reference-lock): if the image includes any app screen, dashboard, module view, chart, table, navigation, panel, metric card, or other interface element, use the attached OpsUI app screenshots themselves and reproduce them verbatim, pixel-for-pixel.",
+  "Treat each screenshot as a fixed, finished asset that is copied and pasted in as-is. Preserve exactly its layout, rows, columns, labels, metrics, typography, and colours. The screenshots are real OpsUI app UI from opsui.app, hosted on the OpsUI marketing site at opsui.au under the main dashboard section and module pages.",
+  "Do not redraw, restyle, recolour, re-typeset, crop, distort, or reflow the UI, and do not invent fake OpsUI product screens, fake dashboards, fake tables, fake metrics, fake menu items, fake module layouts, or fake UI copy that is not present in the attached app screenshots.",
+  "Use the dashboard screenshot for dashboard/KPI/reporting visuals. Use the specific module screenshots for order, inventory, receiving, shipping, cycle counting, wave picking, zone picking, slotting, routing, and returns visuals. Place UI large, flat, and upright so text and fine detail are not re-synthesised.",
+  "If the concept needs UI but no matching OpsUI app screenshot exists, avoid UI and create a brand-safe operational poster, warehouse/process scene, product-message graphic, or logo-led composition instead. If a screenshot cannot be reproduced faithfully, omit it rather than approximate it.",
 ].join("\n");
+
+const opsUiRealisticStyleDirection = [
+  "The image should feel like a serious, modern WMS/ERP campaign asset, not a generic template.",
+  "Visual direction: premium SaaS/operations aesthetic, clear hierarchy, practical warehouse/ERP/WMS context, controlled contrast, clean modern typography for any new poster copy, and one dominant message if text is used.",
+].join("\n");
+
+// Premium enterprise LinkedIn poster style. This is a reusable art direction:
+// the aesthetic, composition, lighting, typography, and content structure are
+// fixed, while the actual label/headline/copy/cost come from the user prompt.
+const opsUiPremiumPosterDirection = [
+  "Premium enterprise poster style (Apple x Linear x Stripe x high-end SaaS campaign aesthetic): it must look like a billion-dollar enterprise software company advertising to executives on LinkedIn. Make it look real, expensive, and believable.",
+  "Mood: minimalistic luxury enterprise, sophisticated B2B SaaS branding, elegant operational-tech atmosphere.",
+  "Background: dark near-black fading into deep violet gradients; smooth cinematic gradients; soft radial lighting; soft ambient purple glow; soft bloom; ultra-subtle vignette; realistic screen-space glow; purple edge glow.",
+  "Composition: 1:1 square, ultra high resolution, left-heavy. Top-left: the OpsUI OP logo in its purple square. Left side: a huge oversized bold headline with intentional whitespace. Right side only: an abstract operational visual that balances the typography. Bottom-right: cost emphasis.",
+  "Right-side visual: glowing operational geometry only — thin connection lines, network curves, system nodes, architectural arcs, subtle topology graphics, enterprise infrastructure symbolism. Use purple accent strokes and edge glow. Keep it abstract and subtle; it is never an app UI.",
+  "Surfaces: subtle glassmorphism panels, thin divider/separator lines, generous intentional whitespace, sharp typography hierarchy.",
+  "Typography: gigantic bold headline in a clean modern grotesk sans-serif with tight line spacing; thin uppercase micro-labels with wide letter spacing; smaller muted supporting copy.",
+  "Bottom alignment: elegant spacing blocks with a footer aligned exactly like luxury B2B campaigns.",
+  "Hard nos: NO clutter, NO fake dashboards, NO generic AI SaaS UI, NO random stock illustrations, NO busy backgrounds. Minimal iconography only if extremely subtle.",
+  "",
+  "Poster content structure — write concise, executive, OpsUI-voice copy. Take the actual wording from the user prompt when it specifies it; otherwise write fitting operational-economics copy in OpsUI's voice:",
+  "- A small uppercase micro-label (example: \"OPERATIONAL ECONOMICS\").",
+  "- A short, punchy headline broken across 2-3 lines (example: \"Your operation\" / \"shouldn't rely\" / \"on copy paste.\").",
+  "- 2-3 lines of muted supporting copy explaining the operational insight (example: \"Most warehouse coordination work exists because systems fail to communicate properly.\").",
+  "- A single bottom insight line (example: \"Manual reconciliation is operational debt.\").",
+  "- A cost callout box with a large currency figure and a small caption beneath it (example: \"≈ NZ$140,000\" / \"avoidable annual coordination overhead\").",
+  "- Footer, bottom aligned: \"— Heinricht, OpsUI\" on one line and \"opsui.co.nz\" beneath it.",
+].join("\n");
+
+type ImageStyleConfig = {
+  // gpt-image / Responses image_generation size.
+  size: "1024x1024" | "1024x1536";
+  // dall-e-3 fallback size (different allowed set).
+  dalleSize: "1024x1024" | "1024x1792";
+  // Whether to attach the OpsUI app screenshots as reference images.
+  includeUiReferences: boolean;
+};
+
+const imageStyleConfig: Record<AiPostImageStyle, ImageStyleConfig> = {
+  realistic: {
+    size: "1024x1536",
+    dalleSize: "1024x1792",
+    includeUiReferences: true,
+  },
+  premium: {
+    size: "1024x1024",
+    dalleSize: "1024x1024",
+    includeUiReferences: false,
+  },
+};
+
+const buildStyleArtDirection = (style: AiPostImageStyle) => {
+  if (style === "premium") {
+    return [
+      "Style: PREMIUM ENTERPRISE POSTER.",
+      opsUiPremiumPosterDirection,
+      "",
+      "No app UI for this style: do not include any OpsUI app screenshots, dashboards, tables, charts, or product UI. Use abstract operational geometry instead. No app screenshots are attached for this style.",
+      "",
+      "Logo direction:",
+      opsUiLogoDirection,
+    ];
+  }
+
+  return [
+    "Style: REALISTIC.",
+    opsUiRealisticStyleDirection,
+    "",
+    "UI reference direction:",
+    opsUiUiReferenceDirection,
+    "",
+    "Logo direction:",
+    opsUiLogoDirection,
+  ];
+};
 
 const opsUiAppReferenceUrls = [
   "https://opsui.app/",
@@ -274,7 +350,7 @@ const opsUiScreenshotSourceUrls = [
 const fallbackOpsUiAppContext = [
   "OpsUI app source: https://opsui.app/",
   "OpsUI is an enterprise resource planning system with operational modules for order management, inventory, receiving/inbound, shipping/outbound, dashboards/reporting, cycle counting, wave picking, zone picking, slotting optimisation, route optimisation, and returns management.",
-  "Use OpsUI app screenshots from the marketing module pages as visual evidence for real UI patterns. Treat opsui.au only as the screenshot host, not as permission to invent marketing-page UI inside product screenshots.",
+  "The attached OpsUI app screenshots are the only source of OpsUI UI; reproduce them verbatim and never derive, infer, or invent UI patterns from them. Treat opsui.au only as the screenshot host, not as permission to invent marketing-page UI inside product screenshots.",
   `Screenshot source pages: ${opsUiScreenshotSourceUrls.join(", ")}`,
 ].join("\n");
 
@@ -446,25 +522,21 @@ const buildImagePrompt = (input: {
   tags: string[];
   appContext: string;
   recentGenerations: DbAiPostImageGenerationRow[];
+  style: AiPostImageStyle;
 }) =>
   [
-    "Create one premium portrait social media image for OpsUI based on the user prompt.",
-    "Use creative freedom. The image should feel like a serious, modern WMS/ERP campaign asset, not a generic template.",
-    "Visual direction: premium SaaS/operations aesthetic, clear hierarchy, practical warehouse/ERP/WMS context, controlled contrast, clean modern typography, and one dominant message if text is used.",
+    "Create one premium social media image for OpsUI based on the user prompt and the selected style.",
+    "Use creative freedom for the layout, background, scene, and composition only; never restyle, recolour, re-typeset, or modernise the attached reference assets. The reference-lock rules take priority over all art direction.",
+    ...buildStyleArtDirection(input.style),
+    "",
     "Do not paste the full prompt into the image. Use only short, intentional poster copy when useful.",
     "Avoid childish visuals, fake hype, clutter, irrelevant stock imagery, and unreadable text.",
     "",
-    "UI reference direction:",
-    opsUiUiReferenceDirection,
-    "",
-    "Logo direction:",
-    opsUiLogoDirection,
-    "",
     "Fixed OpsUI social direction:",
     opsUiSocialDirection,
-    "",
-    "OpsUI app context:",
-    input.appContext,
+    ...(input.style === "realistic"
+      ? ["", "OpsUI app context:", input.appContext]
+      : []),
     "",
     input.recentGenerations.length
       ? `Recent image generation context:\n${formatImageGenerationHistory(input.recentGenerations)}`
@@ -485,6 +557,13 @@ const imageModelFileExtension = (model: string) =>
 
 const imageModelMimeType = (model: string) =>
   model === "dall-e-3" ? "image/png" : "image/jpeg";
+
+// input_fidelity "high" forces the model to copy the supplied reference images
+// in verbatim instead of loosely reinterpreting them. It is only a settable
+// parameter on gpt-image-1 / gpt-image-1.5; passing it to gpt-image-1-mini,
+// gpt-image-2, or dall-e-* returns a 400, so it must be guarded per model.
+const supportsInputFidelity = (model: string) =>
+  model === "gpt-image-1" || model === "gpt-image-1.5";
 
 const fetchImageAsBase64 = async (url: string) => {
   const response = await fetch(url);
@@ -538,13 +617,32 @@ const findResponsesImageData = (response: unknown) => {
   return imageCall?.result ?? null;
 };
 
-const buildResponsesImageInput = (prompt: string) => {
+const buildResponsesImageInput = (
+  prompt: string,
+  includeUiReferences: boolean,
+) => {
   const userContent: Array<
     | { type: "input_text"; text: string }
     | { type: "input_image"; image_url: string; detail: "high" }
   > = [{ type: "input_text", text: prompt }];
 
+  // Each reference is labelled by index + role and locked to verbatim
+  // reproduction. The logo is attached first because, when multiple reference
+  // images are supplied, the first one is preserved with the finest detail.
+  let referenceIndex = 0;
+
   if (opsUiLogoReferenceDataUrl) {
+    referenceIndex += 1;
+    userContent.push({
+      type: "input_text",
+      text: [
+        `Image ${referenceIndex} = OP logo (flat square purple background, bold white uppercase OP).`,
+        "FIXED REFERENCE ASSET — copy and paste it in verbatim, pixel-for-pixel; it is final and immutable.",
+        "Preserve exactly its shape, proportions, colours/hex, letterforms, and aspect ratio.",
+        "Do not recolour, restyle, redraw, re-render, re-typeset, simplify, crop, rotate, distort, or add gradients, shadows, or glows. Never use the old glowing black OP icon.",
+        "If it cannot be reproduced faithfully, omit it rather than alter it.",
+      ].join(" "),
+    });
     userContent.push({
       type: "input_image",
       image_url: opsUiLogoReferenceDataUrl,
@@ -552,17 +650,33 @@ const buildResponsesImageInput = (prompt: string) => {
     });
   }
 
-  for (const reference of opsUiVisualReferences) {
-    userContent.push({
-      type: "input_text",
-      text: `Visual reference: ${reference.label}. Use this only as OpsUI app UI reference.`,
-    });
-    userContent.push({
-      type: "input_image",
-      image_url: reference.dataUrl,
-      detail: "high",
-    });
+  let attachedScreenshotCount = 0;
+
+  if (includeUiReferences) {
+    for (const reference of opsUiVisualReferences) {
+      referenceIndex += 1;
+      attachedScreenshotCount += 1;
+      userContent.push({
+        type: "input_text",
+        text: [
+          `Image ${referenceIndex} = OpsUI app screenshot — ${reference.label}.`,
+          "FIXED REFERENCE ASSET — copy and paste it in verbatim, pixel-for-pixel; it is final and immutable.",
+          "Preserve exactly its layout, rows, columns, labels, metrics, typography, and colours.",
+          "Do not redraw, restyle, recolour, crop, distort, reflow, or invent any metric, row, control, or copy that is not present in it. Use it only as OpsUI app UI, reproduced as-is.",
+          "If it cannot be reproduced faithfully, omit it rather than alter it.",
+        ].join(" "),
+      });
+      userContent.push({
+        type: "input_image",
+        image_url: reference.dataUrl,
+        detail: "high",
+      });
+    }
   }
+
+  const uiReferenceInstruction = attachedScreenshotCount > 0
+    ? "Use the attached OpsUI app screenshots (labelled in the user message) for any UI, dashboard, module view, chart, table, metric card, navigation, typography, or layout, reproduced verbatim. The app is opsui.app; the screenshots are hosted on opsui.au module pages. Never fabricate OpsUI screens, metrics, menu items, or copy."
+    : "No app screenshots are attached. Do not include any OpsUI app UI, dashboard, table, chart, or product screen; use abstract operational geometry instead, and never fabricate OpsUI UI.";
 
   return [
     {
@@ -572,12 +686,24 @@ const buildResponsesImageInput = (prompt: string) => {
           type: "input_text" as const,
           text: [
             "Use the image_generation tool to create one premium portrait social media image for OpsUI.",
-            "Use the attached OP logo reference whenever the output needs a logo or brand mark.",
-            "Use the attached OpsUI app screenshots whenever the output needs any UI, dashboard, module view, chart, table, metric card, navigation, typography, or layout reference.",
-            "The app is opsui.app; the screenshots are hosted on opsui.au module pages.",
-            "If accurate UI cannot be derived from the references, omit UI instead of inventing screens.",
+            "",
+            "REFERENCE-LOCK RULES (highest priority; these override all style, creativity, and art-direction instructions).",
+            "Treat every attached reference image as a FIXED, FINISHED ASSET to be copied and pasted in, not a subject to be generated, imagined, redrawn, or improved.",
+            "Each attached reference image is labelled by index and role in the user message (the OP logo, and OpsUI app screenshots). Follow those labels exactly and refer to assets only by them.",
+            "For EVERY reference image:",
+            "- Reproduce it exactly, pixel-for-pixel, as supplied. It is final and immutable.",
+            "- Preserve exactly its shape, proportions, colours and exact hex, typography, glyph spacing, internal layout, crop, and aspect ratio.",
+            "- Do not recolour, restyle, redraw, re-render, re-typeset, simplify, modernise, or clean up.",
+            "- Do not add gradients, shadows, glows, borders, or effects that are not already in the asset.",
+            "- Do not crop, rotate, skew, mirror, stretch, distort, reflow, or add or remove any element inside it.",
+            "- Do not invent text, data, labels, rows, charts, controls, or UI that is not present in the supplied asset.",
+            "- Place it large, flat, and upright so no detail has to be re-synthesised.",
+            "Use the attached OP logo (Image 1) for any logo, brand mark, app icon, watermark, or corner bug. It is a flat square purple background with bold white uppercase OP; no gradient, no glow, never the old glowing black OP icon.",
+            uiReferenceInstruction,
+            "Restate and obey these invariants on every regeneration; do not let the references drift.",
+            "FAIL-SAFE: if any reference cannot be reproduced faithfully at the required size and fidelity, omit it entirely rather than output an altered, approximate, or invented version. A missing logo or UI is acceptable; a wrong one is not.",
             "Return the generated image only.",
-          ].join(" "),
+          ].join("\n"),
         },
       ],
     },
@@ -600,21 +726,27 @@ const getLogoReferenceUpload = async () => {
   );
 };
 
-const generatePostImageViaResponses = async (prompt: string) => {
+const generatePostImageViaResponses = async (
+  prompt: string,
+  styleConfig: ImageStyleConfig,
+) => {
   if (!openai) {
     throw new Error("OpenAI is not configured.");
   }
 
   const response = await openai.responses.create({
     model: env.openAiImageReasoningModel,
-    input: buildResponsesImageInput(prompt),
+    input: buildResponsesImageInput(prompt, styleConfig.includeUiReferences),
     tools: [
       {
         type: "image_generation",
         model: env.openAiImageModel,
-        size: "1024x1536",
+        size: styleConfig.size,
         quality: "high",
         output_format: "jpeg",
+        ...(supportsInputFidelity(env.openAiImageModel)
+          ? { input_fidelity: "high" as const }
+          : {}),
       },
     ],
   });
@@ -632,7 +764,10 @@ const generatePostImageViaResponses = async (prompt: string) => {
   };
 };
 
-const generatePostImageWithFallback = async (prompt: string) => {
+const generatePostImageWithFallback = async (
+  prompt: string,
+  styleConfig: ImageStyleConfig,
+) => {
   if (!openai) {
     throw new Error("OpenAI is not configured.");
   }
@@ -645,7 +780,7 @@ const generatePostImageWithFallback = async (prompt: string) => {
   let lastError: unknown;
 
   try {
-    return await generatePostImageViaResponses(prompt);
+    return await generatePostImageViaResponses(prompt, styleConfig);
   } catch (error) {
     lastError = error;
   }
@@ -659,7 +794,7 @@ const generatePostImageWithFallback = async (prompt: string) => {
           model,
           prompt,
           n: 1,
-          size: "1024x1792",
+          size: styleConfig.dalleSize,
           quality: "hd",
           response_format: "b64_json",
           style: "vivid",
@@ -673,16 +808,18 @@ const generatePostImageWithFallback = async (prompt: string) => {
               image: logoReferenceUpload,
               prompt,
               n: 1,
-              size: "1024x1536",
+              size: styleConfig.size,
               quality: "high",
               output_format: "jpeg",
-              input_fidelity: "high",
+              ...(supportsInputFidelity(model)
+                ? { input_fidelity: "high" as const }
+                : {}),
             })
           : await openai?.images.generate({
               model,
               prompt,
               n: 1,
-              size: "1024x1536",
+              size: styleConfig.size,
               quality: "high",
               output_format: "jpeg",
             });
@@ -798,6 +935,7 @@ export const registerAiRoutes = (app: import("fastify").FastifyInstance) => {
         6,
       );
       const appContext = await fetchOpsUiAppContext();
+      const styleConfig = imageStyleConfig[input.style];
 
       let generatedImage: Awaited<ReturnType<typeof generatePostImageWithFallback>>;
 
@@ -809,7 +947,9 @@ export const registerAiRoutes = (app: import("fastify").FastifyInstance) => {
             tags,
             appContext,
             recentGenerations,
+            style: input.style,
           }),
+          styleConfig,
         );
       } catch (error) {
         app.log.error({ error }, "OpenAI post image generation failed");

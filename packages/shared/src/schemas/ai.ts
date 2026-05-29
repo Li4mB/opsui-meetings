@@ -67,11 +67,14 @@ export const aiPostContentSchema = z.object({
   model: z.string(),
 });
 
+export const aiPostImageStyleSchema = z.enum(["realistic", "premium"]);
+
 export const aiPostImageRequestSchema = z.object({
   prompt: z.string().min(1).max(8000),
   caption: z.string().max(2200).optional(),
   tags: z.array(z.string()).max(12).default([]),
   conversationId: z.string().trim().min(1).max(160).optional(),
+  style: aiPostImageStyleSchema.default("realistic"),
 });
 
 export const aiPostImageSchema = z.object({
@@ -90,3 +93,4 @@ export type AiPostContent = z.infer<typeof aiPostContentSchema>;
 export type AiPostContentRequest = z.infer<typeof aiPostContentRequestSchema>;
 export type AiPostImage = z.infer<typeof aiPostImageSchema>;
 export type AiPostImageRequest = z.infer<typeof aiPostImageRequestSchema>;
+export type AiPostImageStyle = z.infer<typeof aiPostImageStyleSchema>;
