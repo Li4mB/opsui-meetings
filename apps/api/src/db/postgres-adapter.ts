@@ -5,6 +5,7 @@ import { env } from "../config/env.js";
 import type {
   DbAiMeetingGuideRow,
   DbAiPostImageGenerationRow,
+  DbLoftBookingRow,
   DbMeetingRequestRow,
   DbMeetingRow,
   DbSocialPlatform,
@@ -30,6 +31,8 @@ const aiPostImageGenerationsTable = `${schemaName}.ai_post_image_generations`;
 const meetingRequestsTable = `${schemaName}.meeting_requests`;
 const scheduledSocialPostsTable = `${schemaName}.scheduled_social_posts`;
 const socialAccountsTable = `${schemaName}.social_accounts`;
+const loftBookingsTable = `${schemaName}.loft_bookings`;
+const loftAccessTable = `${schemaName}.loft_access`;
 
 const schemaSql = `
   CREATE SCHEMA IF NOT EXISTS ${schemaName};
@@ -179,6 +182,22 @@ const schemaSql = `
 
   CREATE INDEX IF NOT EXISTS idx_social_accounts_platform
     ON ${socialAccountsTable}(platform, active);
+
+  CREATE TABLE IF NOT EXISTS ${loftBookingsTable} (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    business TEXT NOT NULL DEFAULT '',
+    email TEXT NOT NULL DEFAULT '',
+    phone TEXT NOT NULL DEFAULT '',
+    message TEXT NOT NULL DEFAULT '',
+    submitted_at TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS ${loftAccessTable} (
+    user_id TEXT PRIMARY KEY,
+    granted_at TEXT NOT NULL
+  );
 `;
 
 const selectActiveMeetingsQuery = `
@@ -824,6 +843,61 @@ export const createPostgresAdapter = (): StorageAdapter => {
 
     async deleteMeetingRequestById(id) {
       await execute(`DELETE FROM ${meetingRequestsTable} WHERE id = $1`, [id]);
+    },
+
+    async insertLoftBooking(row) {
+      await execute(
+        `
+          INSERT INTO ${loftBookingsTable} (
+            id,
+            name,
+            business,
+            email,
+            phone,
+            message,
+            submitted_at,
+            created_at
+          ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7, $8
+          )
+        `,
+        [
+          row.id,
+          row.name,
+          row.business,
+          row.email,
+          row.phone,
+          row.message,
+          row.submitted_at,
+          row.created_at,
+        ],
+      );
+    },
+
+    async listLoftBookings() {
+      return queryRows<DbLoftBookingRow>(
+        `SELECT * FROM ${loftBookingsTable} ORDER BY submitted_at DESC`,
+      );
+    },
+
+    async hasLoftAccess(userId) {
+      const row = await queryRow<{ user_id: string }>(
+        `SELECT user_id FROM ${loftAccessTable} WHERE user_id = $1 LIMIT 1`,
+        [userId],
+      );
+
+      return Boolean(row);
+    },
+
+    async grantLoftAccess(userId) {
+      await execute(
+        `
+          INSERT INTO ${loftAccessTable} (user_id, granted_at)
+          VALUES ($1, $2)
+          ON CONFLICT (user_id) DO NOTHING
+        `,
+        [userId, new Date().toISOString()],
+      );
     },
 
     async insertScheduledSocialPosts(rows) {

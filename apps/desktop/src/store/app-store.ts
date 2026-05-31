@@ -1,8 +1,8 @@
-import type { Country, Meeting, Session, User } from "@opsui/shared";
+import type { Country, LoftBooking, Meeting, Session, User } from "@opsui/shared";
 import { create } from "zustand";
 
 export type ViewMode = "list" | "calendar";
-export type SurfaceMode = "meetings" | "past" | "current" | "create" | "post" | "admin";
+export type SurfaceMode = "meetings" | "past" | "current" | "create" | "post" | "admin" | "loft";
 export type CurrentMeetingMode = "embedded" | "window";
 export type CountryFilter = "All" | Country;
 
@@ -21,6 +21,8 @@ type AppState = {
   currentMeeting: Meeting | null;
   currentMeetingMode: CurrentMeetingMode;
   users: User[];
+  loftBookings: LoftBooking[];
+  loftHasAccess: boolean;
   lastSuccessfulSyncAt: string | null;
   selectedMeetingId: string | null;
   viewMode: ViewMode;
@@ -35,6 +37,8 @@ type AppState = {
   setCurrentMeeting: (meeting: Meeting | null) => void;
   setCurrentMeetingMode: (mode: CurrentMeetingMode) => void;
   setUsers: (users: User[]) => void;
+  setLoftBookings: (bookings: LoftBooking[]) => void;
+  setLoftHasAccess: (hasAccess: boolean) => void;
   updateMeeting: (meeting: Meeting) => void;
   setSelectedMeetingId: (id: string | null) => void;
   setViewMode: (mode: ViewMode) => void;
@@ -59,6 +63,8 @@ export const useAppStore = create<AppState>((set) => ({
   currentMeeting: null,
   currentMeetingMode: "embedded",
   users: [],
+  loftBookings: [],
+  loftHasAccess: false,
   lastSuccessfulSyncAt: null,
   selectedMeetingId: null,
   viewMode: "list",
@@ -74,6 +80,8 @@ export const useAppStore = create<AppState>((set) => ({
   setCurrentMeeting: (currentMeeting) => set({ currentMeeting }),
   setCurrentMeetingMode: (currentMeetingMode) => set({ currentMeetingMode }),
   setUsers: (users) => set({ users }),
+  setLoftBookings: (loftBookings) => set({ loftBookings }),
+  setLoftHasAccess: (loftHasAccess) => set({ loftHasAccess }),
   updateMeeting: (meeting) =>
     set((state) => ({
       meetings: state.meetings.map((entry) =>
@@ -96,6 +104,8 @@ export const useAppStore = create<AppState>((set) => ({
       currentMeeting: null,
       currentMeetingMode: "embedded",
       users: [],
+      loftBookings: [],
+      loftHasAccess: false,
       lastSuccessfulSyncAt: null,
       selectedMeetingId: null,
       filters: defaultFilters,

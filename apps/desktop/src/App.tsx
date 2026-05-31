@@ -29,10 +29,13 @@ import {
   getAuthBootstrap,
   getCurrentSessionUser,
   getSavedMeetingGuide,
+  getLoftAccess,
+  getLoftBookings,
   getMeetings,
   getPastMeetings,
   getUsers,
   login,
+  unlockLoft,
   resolveMeeting,
   saveMeetingGuide,
   syncMeetings,
@@ -72,10 +75,13 @@ import {
   installAppUpdate,
   type UpdateState,
 } from "./lib/updater";
+import { ensureNotificationPermission, notifyNewMeetings } from "./lib/notify";
 
 type BootState = "loading" | "ready" | "error";
 const STARTUP_TIMEOUT_MS = 3000;
 const UPDATE_POLL_INTERVAL_MS = 2 * 60 * 1000;
+// Background auto-sync cadence for meeting data (mirrors the updater poll).
+const MEETING_SYNC_INTERVAL_MS = 2 * 60 * 1000;
 
 async function withTimeout<T>(promise: Promise<T>, fallback: T): Promise<T> {
   return Promise.race([
@@ -93,6 +99,8 @@ const App = () => {
   const pastMeetings = useAppStore((state) => state.pastMeetings);
   const currentMeeting = useAppStore((state) => state.currentMeeting);
   const users = useAppStore((state) => state.users);
+  const loftBookings = useAppStore((state) => state.loftBookings);
+  const loftHasAccess = useAppStore((state) => state.loftHasAccess);
   const lastSuccessfulSyncAt = useAppStore((state) => state.lastSuccessfulSyncAt);
   const selectedMeetingId = useAppStore((state) => state.selectedMeetingId);
   const viewMode = useAppStore((state) => state.viewMode);
@@ -107,6 +115,8 @@ const App = () => {
   const setCurrentMeeting = useAppStore((state) => state.setCurrentMeeting);
   const setCurrentMeetingMode = useAppStore((state) => state.setCurrentMeetingMode);
   const setUsers = useAppStore((state) => state.setUsers);
+  const setLoftBookings = useAppStore((state) => state.setLoftBookings);
+  const setLoftHasAccess = useAppStore((state) => state.setLoftHasAccess);
   const updateMeetingInStore = useAppStore((state) => state.updateMeeting);
   const setSelectedMeetingId = useAppStore((state) => state.setSelectedMeetingId);
   const setViewMode = useAppStore((state) => state.setViewMode);
@@ -127,6 +137,32 @@ const App = () => {
   );
   const updateCheckInFlight = useRef(false);
   const deferredQuery = useDeferredValue(filters.query.trim().toLowerCase());
+
+  // --- New-meeting detection for desktop notifications ---
+  // googleEventIds (fallback: id) we've already accounted for. Notifications
+  // stay disarmed until a baseline is established (cache + first sync) so we
+  // never alert for the entire calendar on first load / login.
+  const seenEventIdsRef = useRef<Set<string>>(new Set());
+  const notificationsArmedRef = useRef(false);
+  const meetingPollInFlight = useRef(false);
+  const sessionRef = useRef<Session | null>(session);
+  sessionRef.current = session;
+
+  const detectNewMeetings = (incoming: Meeting[]): Meeting[] => {
+    const seen = seenEventIdsRef.current;
+    const fresh: Meeting[] = [];
+    for (const meeting of incoming) {
+      const key = meeting.googleEventId || meeting.id;
+      if (!key || seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      if (notificationsArmedRef.current) {
+        fresh.push(meeting);
+      }
+    }
+    return fresh;
+  };
 
   const selectedMeeting =
     meetings.find((meeting) => meeting.id === selectedMeetingId) ??
@@ -210,6 +246,9 @@ const App = () => {
       normalizedPastMeetings,
     );
 
+    // Detect genuinely-new upcoming meetings (no-op until armed) and notify.
+    const newMeetings = detectNewMeetings(normalizedMeetings);
+
     startTransition(() => {
       setUsers(incomingUsers);
       setMeetings(normalizedMeetings, incomingMeetings.lastSuccessfulSyncAt);
@@ -231,12 +270,34 @@ const App = () => {
       }),
       saveCurrentMeetingCache(nextCurrentMeeting),
     ]);
+
+    if (newMeetings.length > 0) {
+      void notifyNewMeetings(newMeetings);
+    }
   };
 
   const resetSession = async (message?: string) => {
     clearWorkspace();
     await Promise.all([clearSessionCache(), clearStoredSession()]);
     setLoginError(message ?? null);
+  };
+
+  // Keep Loft access + bookings fresh. Errors are swallowed so a Loft outage
+  // never breaks the core meetings workspace refresh / bootstrap / auto-sync.
+  const refreshLoft = async (token: string) => {
+    try {
+      const access = await getLoftAccess(token);
+      setLoftHasAccess(access.hasAccess);
+
+      if (access.hasAccess) {
+        const data = await getLoftBookings(token);
+        setLoftBookings(data.bookings);
+      } else {
+        setLoftBookings([]);
+      }
+    } catch {
+      // Ignore Loft refresh failures; the meetings workspace stays usable.
+    }
   };
 
   const refreshWorkspace = async (
@@ -276,6 +337,7 @@ const App = () => {
       ]);
 
       await applyWorkspace(incomingUsers, incomingMeetings, incomingPastMeetings);
+      await refreshLoft(nextSession.token);
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
         await resetSession("Your session expired. Please sign in again.");
@@ -283,10 +345,14 @@ const App = () => {
       }
 
       setOffline(true);
-      setSyncState(
-        "error",
-        error instanceof Error ? error.message : "Unable to reach OpsUI services",
-      );
+      // Background (quiet) polls shouldn't flip the visible status to an error
+      // on a transient blip; the offline flag already conveys connectivity.
+      if (!options.quiet) {
+        setSyncState(
+          "error",
+          error instanceof Error ? error.message : "Unable to reach OpsUI services",
+        );
+      }
     }
   };
   const refreshWorkspaceEvent = useEffectEvent(refreshWorkspace);
@@ -341,6 +407,15 @@ const App = () => {
           ? normalizeMeeting(cachedCurrentMeeting)
           : null;
 
+        // Seed the notification baseline from cached meetings so reopening the
+        // app never re-alerts for meetings that were already known.
+        for (const meeting of normalizedCachedMeetings.meetings) {
+          const key = meeting.googleEventId || meeting.id;
+          if (key) {
+            seenEventIdsRef.current.add(key);
+          }
+        }
+
         let nextSession = cachedSession;
 
         if (cachedSession) {
@@ -392,9 +467,13 @@ const App = () => {
         setBootState("ready");
 
         if (nextSession) {
+          // The initial refresh completes the baseline; arm notifications only
+          // afterwards so the first network sync doesn't alert for everything.
           void refreshWorkspaceEvent(nextSession, {
             syncFirst: false,
             quiet: true,
+          }).then(() => {
+            notificationsArmedRef.current = true;
           });
         }
       } catch (error) {
@@ -426,6 +505,11 @@ const App = () => {
     setLoggingIn(true);
     setLoginError(null);
 
+    // Fresh login = fresh baseline; don't notify for the account's existing
+    // meetings, only ones that arrive after this first sync.
+    notificationsArmedRef.current = false;
+    seenEventIdsRef.current = new Set();
+
     try {
       const nextSession = await login(credentials);
       setSession(nextSession);
@@ -434,6 +518,7 @@ const App = () => {
         saveStoredSession(nextSession),
       ]);
       await refreshWorkspace(nextSession, { syncFirst: true });
+      notificationsArmedRef.current = true;
     } catch (error) {
       setLoginError(
         error instanceof Error ? error.message : "Unable to sign in",
@@ -449,6 +534,9 @@ const App = () => {
     clearWorkspace();
     await Promise.all([clearSessionCache(), clearStoredSession()]);
     setLoginError(null);
+    // Reset notification baseline so a different account starts clean.
+    notificationsArmedRef.current = false;
+    seenEventIdsRef.current = new Set();
   };
 
   const handleAssign = async (meetingId: string, assignedUserId: string | null) => {
@@ -558,6 +646,26 @@ const App = () => {
           : "Unable to save the meeting intake";
       setSyncState("error", message);
       throw new Error(message);
+    }
+  };
+
+  const handleUnlockLoft = async (password: string) => {
+    if (!session) {
+      setSyncState("error", "Sign in before unlocking Loft");
+      return;
+    }
+
+    try {
+      const result = await unlockLoft(session.token, password);
+
+      if (result.hasAccess) {
+        setLoftHasAccess(true);
+        const data = await getLoftBookings(session.token);
+        setLoftBookings(data.bookings);
+        setSurfaceMode("loft");
+      }
+    } catch {
+      setSyncState("error", "Incorrect Loft password");
     }
   };
 
@@ -748,6 +856,64 @@ const App = () => {
     };
   }, [updaterEnabled]);
 
+  // Ask for OS notification permission once the user is authenticated.
+  useEffect(() => {
+    if (session) {
+      void ensureNotificationPermission();
+    }
+  }, [session?.token]);
+
+  // Background auto-sync: keep meeting data fresh without the manual button.
+  // Runs on an interval, on window focus, and when connectivity returns. Keeps
+  // running while the window is hidden-to-tray, which is what drives new-meeting
+  // notifications when the app isn't in the foreground.
+  useEffect(() => {
+    if (!session?.token) {
+      return;
+    }
+
+    let active = true;
+
+    const runAutoSync = async () => {
+      if (meetingPollInFlight.current || !active) {
+        return;
+      }
+      if (typeof navigator !== "undefined" && navigator.onLine === false) {
+        return;
+      }
+      const activeSession = sessionRef.current;
+      if (!activeSession) {
+        return;
+      }
+
+      meetingPollInFlight.current = true;
+      try {
+        await refreshWorkspaceEvent(activeSession, {
+          syncFirst: true,
+          quiet: true,
+        });
+      } finally {
+        meetingPollInFlight.current = false;
+      }
+    };
+
+    const interval = window.setInterval(() => {
+      void runAutoSync();
+    }, MEETING_SYNC_INTERVAL_MS);
+
+    const handleFocus = () => void runAutoSync();
+    const handleOnline = () => void runAutoSync();
+    window.addEventListener("focus", handleFocus);
+    window.addEventListener("online", handleOnline);
+
+    return () => {
+      active = false;
+      window.clearInterval(interval);
+      window.removeEventListener("focus", handleFocus);
+      window.removeEventListener("online", handleOnline);
+    };
+  }, [session?.token]);
+
   if (updateState.status !== "ready") {
     return (
       <UpdateGate
@@ -795,6 +961,8 @@ const App = () => {
       filters={filters}
       currentMeeting={currentMeeting}
       lastSuccessfulSyncAt={lastSuccessfulSyncAt}
+      loftBookings={loftBookings}
+      loftHasAccess={loftHasAccess}
       meetings={meetings}
       pastMeetings={pastMeetings}
       offline={offline}
@@ -817,6 +985,7 @@ const App = () => {
       onStartCurrentMeeting={handleStartCurrentMeeting}
       onSetViewMode={setViewMode}
       onSync={() => refreshWorkspace(session, { syncFirst: true })}
+      onUnlockLoft={handleUnlockLoft}
       onUpdateUser={handleUpdateUser}
       selectedMeeting={selectedMeeting}
       session={session}

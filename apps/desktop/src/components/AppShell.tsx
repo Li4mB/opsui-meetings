@@ -1,9 +1,10 @@
-﻿import { useEffect } from "react";
+﻿import { useEffect, useState } from "react";
 import type {
   AiMeetingGuide,
   AiMeetingGuideBinding,
   CreateMeetingRequestInput,
   CreateUserInput,
+  LoftBooking,
   Meeting,
   MeetingRequest,
   Session,
@@ -25,6 +26,7 @@ import { CurrentMeetingPanel } from "./CurrentMeetingPanel";
 import { MeetingCalendar } from "./MeetingCalendar";
 import { MeetingDetailDrawer } from "./MeetingDetailDrawer";
 import { MeetingList } from "./MeetingList";
+import { LoftList } from "./LoftList";
 import { PostPanel } from "./PostPanel";
 
 type Props = {
@@ -35,6 +37,8 @@ type Props = {
   filteredPastMeetings: Meeting[];
   currentMeeting: Meeting | null;
   users: User[];
+  loftBookings: LoftBooking[];
+  loftHasAccess: boolean;
   selectedMeeting: Meeting | null;
   viewMode: ViewMode;
   surfaceMode: SurfaceMode;
@@ -72,6 +76,7 @@ type Props = {
   onCreateMeetingRequest: (
     input: CreateMeetingRequestInput,
   ) => Promise<MeetingRequest>;
+  onUnlockLoft: (password: string) => Promise<void>;
 };
 
 const allCountryOptions: Array<{
@@ -96,6 +101,8 @@ export const AppShell = ({
   filteredPastMeetings,
   currentMeeting,
   users,
+  loftBookings,
+  loftHasAccess,
   selectedMeeting,
   viewMode,
   surfaceMode,
@@ -124,10 +131,16 @@ export const AppShell = ({
   onUpdateUser,
   onDeleteUser,
   onCreateMeetingRequest,
+  onUnlockLoft,
 }: Props) => {
+  const [loftPassword, setLoftPassword] = useState("");
+  const [loftSubmitting, setLoftSubmitting] = useState(false);
   const canAccessAdmin = session.user.role === "admin";
   const activeSurfaceMode =
-    !canAccessAdmin && surfaceMode === "admin" ? "meetings" : surfaceMode;
+    (!canAccessAdmin && surfaceMode === "admin") ||
+    (!loftHasAccess && surfaceMode === "loft")
+      ? "meetings"
+      : surfaceMode;
   const scopedMeetings = activeSurfaceMode === "past" ? pastMeetings : meetings;
   const scopedFilteredMeetings =
     activeSurfaceMode === "past" ? filteredPastMeetings : filteredMeetings;
@@ -273,6 +286,15 @@ export const AppShell = ({
                 type="button"
               >
                 Current Meeting
+              </button>
+            ) : null}
+            {loftHasAccess ? (
+              <button
+                className={`app-nav__item ${activeSurfaceMode === "loft" ? "app-nav__item--active" : ""}`}
+                onClick={() => onSetSurfaceMode("loft")}
+                type="button"
+              >
+                LoftAU
               </button>
             ) : null}
             {canAccessAdmin ? (
@@ -449,6 +471,51 @@ export const AppShell = ({
                   </div>
                 </div>
               </section>
+
+              <section className="sidebar-panel sidebar-panel--loft">
+                <div className="sidebar-section__label">Loft password</div>
+                <div className="sidebar-meta">
+                  {loftHasAccess
+                    ? "LoftAU is unlocked for this account."
+                    : "Enter the Loft password to unlock the LoftAU surface."}
+                </div>
+
+                <form
+                  className="sidebar-loft-form"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    const value = loftPassword.trim();
+
+                    if (!value || loftSubmitting) {
+                      return;
+                    }
+
+                    setLoftSubmitting(true);
+                    void onUnlockLoft(value)
+                      .then(() => setLoftPassword(""))
+                      .finally(() => setLoftSubmitting(false));
+                  }}
+                >
+                  <input
+                    className="sidebar-loft-input"
+                    onChange={(event) => setLoftPassword(event.target.value)}
+                    placeholder="Loft password"
+                    type="password"
+                    value={loftPassword}
+                  />
+                  <button
+                    className="sidebar-loft-btn"
+                    disabled={loftSubmitting || !loftPassword.trim()}
+                    type="submit"
+                  >
+                    {loftSubmitting
+                      ? "Unlocking..."
+                      : loftHasAccess
+                        ? "Re-unlock"
+                        : "Unlock"}
+                  </button>
+                </form>
+              </section>
             </>
           ) : activeSurfaceMode === "current" ? (
             <>
@@ -619,6 +686,23 @@ export const AppShell = ({
               onUpdate={onUpdateUser}
               users={users}
             />
+          ) : activeSurfaceMode === "loft" && loftHasAccess ? (
+            <>
+              <div className="main-toolbar">
+                <div className="main-toolbar__left">
+                  <div>
+                    <div className="sidebar-section__label">Workspace</div>
+                    <h1 className="main-title">LoftAU</h1>
+                  </div>
+                  <span className="main-count">
+                    {loftBookings.length} enquir
+                    {loftBookings.length === 1 ? "y" : "ies"}
+                  </span>
+                </div>
+              </div>
+
+              <LoftList bookings={loftBookings} />
+            </>
           ) : activeSurfaceMode === "create" ? (
             <CreateMeetingPanel
               isSubmitting={syncStatus === "syncing"}

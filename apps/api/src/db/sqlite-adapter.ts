@@ -8,6 +8,7 @@ import type {
   CalendarMeeting,
   DbAiMeetingGuideRow,
   DbAiPostImageGenerationRow,
+  DbLoftBookingRow,
   DbMeetingRequestRow,
   DbMeetingRow,
   DbScheduledSocialPostRow,
@@ -180,6 +181,22 @@ const schemaSql = `
 
   CREATE INDEX IF NOT EXISTS idx_social_accounts_platform
     ON social_accounts(platform, active);
+
+  CREATE TABLE IF NOT EXISTS loft_bookings (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    business TEXT NOT NULL DEFAULT '',
+    email TEXT NOT NULL DEFAULT '',
+    phone TEXT NOT NULL DEFAULT '',
+    message TEXT NOT NULL DEFAULT '',
+    submitted_at TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS loft_access (
+    user_id TEXT PRIMARY KEY,
+    granted_at TEXT NOT NULL
+  );
 `;
 
 const selectActiveMeetingsQuery = `
@@ -801,6 +818,62 @@ export const createSqliteAdapter = (): StorageAdapter => {
     async deleteMeetingRequestById(id) {
       const database = getDb();
       database.prepare("DELETE FROM meeting_requests WHERE id = ?").run(id);
+    },
+
+    async insertLoftBooking(row) {
+      const database = getDb();
+      database.prepare(`
+        INSERT INTO loft_bookings (
+          id,
+          name,
+          business,
+          email,
+          phone,
+          message,
+          submitted_at,
+          created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        row.id,
+        row.name,
+        row.business,
+        row.email,
+        row.phone,
+        row.message,
+        row.submitted_at,
+        row.created_at,
+      );
+    },
+
+    async listLoftBookings() {
+      const database = getDb();
+      return database
+        .prepare<unknown[], DbLoftBookingRow>(
+          "SELECT * FROM loft_bookings ORDER BY submitted_at DESC",
+        )
+        .all();
+    },
+
+    async hasLoftAccess(userId) {
+      const database = getDb();
+      const row = database
+        .prepare<unknown[], { user_id: string }>(
+          "SELECT user_id FROM loft_access WHERE user_id = ? LIMIT 1",
+        )
+        .get(userId);
+
+      return Boolean(row);
+    },
+
+    async grantLoftAccess(userId) {
+      const database = getDb();
+      database
+        .prepare(
+          `INSERT INTO loft_access (user_id, granted_at)
+           VALUES (?, ?)
+           ON CONFLICT (user_id) DO NOTHING`,
+        )
+        .run(userId, new Date().toISOString());
     },
 
     async insertScheduledSocialPosts(rows) {

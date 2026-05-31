@@ -83,6 +83,17 @@ export type DbMeetingRequestRow = {
   created_at: string;
 };
 
+export type DbLoftBookingRow = {
+  id: string;
+  name: string;
+  business: string;
+  email: string;
+  phone: string;
+  message: string;
+  submitted_at: string;
+  created_at: string;
+};
+
 export type DbScheduledSocialPostStatus =
   | "scheduled"
   | "publishing"

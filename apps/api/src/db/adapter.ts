@@ -2,6 +2,7 @@ import type {
   CalendarMeeting,
   DbAiMeetingGuideRow,
   DbAiPostImageGenerationRow,
+  DbLoftBookingRow,
   DbMeetingRequestRow,
   DbMeetingRow,
   DbPastMeetingRow,
@@ -82,6 +83,10 @@ export interface StorageAdapter {
   insertMeetingRequest(row: DbMeetingRequestRow): Promise<void>;
   findMeetingRequestById(id: string): Promise<DbMeetingRequestRow | null>;
   deleteMeetingRequestById(id: string): Promise<void>;
+  insertLoftBooking(row: DbLoftBookingRow): Promise<void>;
+  listLoftBookings(): Promise<DbLoftBookingRow[]>;
+  hasLoftAccess(userId: string): Promise<boolean>;
+  grantLoftAccess(userId: string): Promise<void>;
   insertScheduledSocialPosts(rows: DbScheduledSocialPostRow[]): Promise<void>;
   listScheduledSocialPosts(): Promise<DbScheduledSocialPostWithCreatorRow[]>;
   findScheduledSocialPostById(

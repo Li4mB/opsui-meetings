@@ -13,6 +13,8 @@ import {
   connectSocialAccountInputSchema,
   createMeetingRequestInputSchema,
   createUserInputSchema,
+  loftAccessResponseSchema,
+  loftBookingsResponseSchema,
   meetingRequestSchema,
   meetingsResponseSchema,
   meetingSchema,
@@ -429,4 +431,35 @@ export const createMeetingRequest = (
       body: JSON.stringify(createMeetingRequestInputSchema.parse(input)),
     },
     meetingRequestSchema,
+  );
+
+export const getLoftBookings = (token: string) =>
+  request(
+    "/loft/bookings",
+    {
+      method: "GET",
+      headers: withToken(token),
+    },
+    loftBookingsResponseSchema,
+  );
+
+export const getLoftAccess = (token: string) =>
+  request(
+    "/loft/access",
+    {
+      method: "GET",
+      headers: withToken(token),
+    },
+    loftAccessResponseSchema,
+  );
+
+export const unlockLoft = (token: string, password: string) =>
+  request(
+    "/loft/unlock",
+    {
+      method: "POST",
+      headers: withToken(token),
+      body: JSON.stringify({ password }),
+    },
+    loftAccessResponseSchema,
   );

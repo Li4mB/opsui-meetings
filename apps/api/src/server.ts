@@ -8,6 +8,7 @@ import { registerAuthRoutes } from "./modules/auth.js";
 import { registerAiRoutes } from "./modules/ai.js";
 import { registerMeetingRoutes } from "./modules/meetings.js";
 import { registerMeetingRequestRoutes } from "./modules/meeting-requests.js";
+import { registerLoftRoutes } from "./modules/loft.js";
 import {
   registerSocialPostRoutes,
   startSocialPostScheduler,
@@ -50,6 +51,7 @@ const buildServer = async () => {
   registerMeetingRequestRoutes(app);
   registerUserRoutes(app);
   registerMeetingRoutes(app);
+  registerLoftRoutes(app);
   registerSocialPostRoutes(app);
   startSocialPostScheduler(app);
 
