@@ -116,5 +116,16 @@ export interface StorageAdapter {
   findSocialAccountByPlatform(
     platform: DbSocialPlatform,
   ): Promise<DbSocialAccountWithCreatorRow | null>;
+  findSocialAccountById(
+    id: string,
+  ): Promise<DbSocialAccountWithCreatorRow | null>;
+  updateSocialAccountTokens(
+    id: string,
+    patch: {
+      accessToken: string;
+      expiresAt: string | null;
+      metadataJson: string;
+    },
+  ): Promise<void>;
   deleteSocialAccount(id: string): Promise<boolean>;
 }

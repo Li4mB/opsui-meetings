@@ -22,6 +22,7 @@ type SocialAccountConfig = {
   displayName: string;
   accountId: string;
   accessToken: string;
+  refreshToken: string | null;
   tokenType: string | null;
   expiresAt: string | null;
   source: "database" | "environment";
@@ -100,7 +101,11 @@ const assertResponseOk = async (response: Response, fallback: string) => {
   const { payload, text } = await readJsonResponse(response);
 
   if (!response.ok) {
-    throw new Error(getResponseErrorMessage(payload, text, fallback));
+    const error = new Error(
+      getResponseErrorMessage(payload, text, fallback),
+    ) as Error & { status?: number };
+    error.status = response.status;
+    throw error;
   }
 
   return payload;
@@ -167,6 +172,17 @@ const buildPostImageUrl = (
   return `${publicBaseUrl}/social-posts/assets/${encodeURIComponent(post.id)}/image`;
 };
 
+const parseRefreshTokenFromMetadata = (metadataJson: string): string | null => {
+  try {
+    const metadata = JSON.parse(metadataJson) as { refreshToken?: unknown };
+    return typeof metadata.refreshToken === "string" && metadata.refreshToken
+      ? metadata.refreshToken
+      : null;
+  } catch {
+    return null;
+  }
+};
+
 const toDatabaseAccountConfig = (
   row: DbSocialAccountWithCreatorRow,
 ): SocialAccountConfig => ({
@@ -175,6 +191,7 @@ const toDatabaseAccountConfig = (
   displayName: row.display_name,
   accountId: row.account_id,
   accessToken: row.access_token,
+  refreshToken: parseRefreshTokenFromMetadata(row.metadata_json),
   tokenType: row.token_type,
   expiresAt: row.expires_at,
   source: "database",
@@ -195,6 +212,7 @@ const buildEnvironmentAccounts = (): SocialAccountConfig[] => {
       displayName: "Facebook Page",
       accountId: env.facebookPageId,
       accessToken: env.facebookPageAccessToken,
+      refreshToken: null,
       tokenType: "Bearer",
       expiresAt: null,
       source: "environment",
@@ -212,6 +230,7 @@ const buildEnvironmentAccounts = (): SocialAccountConfig[] => {
       displayName: "Instagram Account",
       accountId: env.instagramUserId,
       accessToken: env.instagramAccessToken,
+      refreshToken: null,
       tokenType: "Bearer",
       expiresAt: null,
       source: "environment",
@@ -229,6 +248,7 @@ const buildEnvironmentAccounts = (): SocialAccountConfig[] => {
       displayName: "LinkedIn Account",
       accountId: env.linkedinAuthorUrn,
       accessToken: env.linkedinAccessToken,
+      refreshToken: null,
       tokenType: "Bearer",
       expiresAt: null,
       source: "environment",
@@ -246,6 +266,7 @@ const buildEnvironmentAccounts = (): SocialAccountConfig[] => {
       displayName: "X Account",
       accountId: env.xAccountId || "authenticated-user",
       accessToken: env.xAccessToken,
+      refreshToken: null,
       tokenType: "Bearer",
       expiresAt: null,
       source: "environment",
@@ -266,14 +287,18 @@ export const listConfiguredSocialAccounts = async () => {
   const databasePlatforms = new Set(
     databaseAccounts.map((account) => account.platform),
   );
+  // Environment accounts are a fallback only for platforms with no connected
+  // database account. Database platforms may now hold multiple accounts.
   const environmentAccounts = buildEnvironmentAccounts().filter(
     (account) => !databasePlatforms.has(account.platform),
   );
-  const accounts = [...databaseAccounts, ...environmentAccounts];
 
-  return socialPlatformOrder
-    .map((platform) => accounts.find((account) => account.platform === platform))
-    .filter(Boolean) as SocialAccountConfig[];
+  return [...databaseAccounts, ...environmentAccounts].sort(
+    (a, b) =>
+      socialPlatformOrder.indexOf(a.platform) -
+        socialPlatformOrder.indexOf(b.platform) ||
+      (a.createdAt ?? "").localeCompare(b.createdAt ?? ""),
+  );
 };
 
 const findConfiguredAccount = async (platform: DbSocialPlatform) => {
@@ -287,6 +312,31 @@ const findConfiguredAccount = async (platform: DbSocialPlatform) => {
     buildEnvironmentAccounts().find((account) => account.platform === platform) ??
     null
   );
+};
+
+// Resolve the exact account a scheduled post targets. Newer posts carry an
+// account_id; legacy posts (account_id null) fall back to the first connected
+// account for the platform, preserving previous behaviour.
+const resolveAccountForPost = async (
+  post: DbScheduledSocialPostWithCreatorRow,
+): Promise<SocialAccountConfig | null> => {
+  if (post.account_id) {
+    const databaseAccount = await storage.findSocialAccountById(post.account_id);
+
+    if (databaseAccount) {
+      return toDatabaseAccountConfig(databaseAccount);
+    }
+
+    const environmentAccount = buildEnvironmentAccounts().find(
+      (account) => account.id === post.account_id,
+    );
+
+    if (environmentAccount) {
+      return environmentAccount;
+    }
+  }
+
+  return findConfiguredAccount(post.platform);
 };
 
 const publishFacebook = async (
@@ -498,6 +548,80 @@ const publishLinkedIn = async (
   return response.headers.get("x-restli-id") ?? getNestedString(payload, ["id"]);
 };
 
+// X (OAuth2 user) access tokens expire after ~2h. When the connected account
+// has a refresh token and the X app client credentials are configured, swap in
+// a fresh access token automatically instead of failing the post.
+const isXRefreshable = (account: SocialAccountConfig) =>
+  account.platform === "twitter" &&
+  Boolean(account.refreshToken) &&
+  Boolean(env.xClientId) &&
+  Boolean(env.xClientSecret);
+
+const refreshXAccessToken = async (
+  account: SocialAccountConfig,
+): Promise<void> => {
+  if (!account.refreshToken) {
+    throw new Error("No X refresh token is stored for this account.");
+  }
+
+  const payload = await assertResponseOk(
+    await fetch("https://api.x.com/2/oauth2/token", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded",
+        Authorization: `Basic ${Buffer.from(
+          `${env.xClientId}:${env.xClientSecret}`,
+        ).toString("base64")}`,
+      },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: account.refreshToken,
+        client_id: env.xClientId,
+      }),
+    }),
+    "X token refresh failed.",
+  );
+  const newAccessToken = getNestedString(payload, ["access_token"]);
+
+  if (!newAccessToken) {
+    throw new Error("X token refresh returned no access token.");
+  }
+
+  const newRefreshToken =
+    getNestedString(payload, ["refresh_token"]) ?? account.refreshToken;
+  const expiresInRaw = payload?.["expires_in"];
+  const expiresIn = typeof expiresInRaw === "number" ? expiresInRaw : 7200;
+  const newExpiresAt = new Date(Date.now() + expiresIn * 1000).toISOString();
+
+  if (account.source === "database") {
+    await storage.updateSocialAccountTokens(account.id, {
+      accessToken: newAccessToken,
+      expiresAt: newExpiresAt,
+      metadataJson: JSON.stringify({ refreshToken: newRefreshToken }),
+    });
+  }
+
+  // Update the in-memory account so the rest of this publish uses the new token.
+  account.accessToken = newAccessToken;
+  account.refreshToken = newRefreshToken;
+  account.expiresAt = newExpiresAt;
+};
+
+// Proactively refresh when the stored token is known to be expired (or about to).
+const ensureFreshXToken = async (account: SocialAccountConfig) => {
+  if (!isXRefreshable(account) || !account.expiresAt) {
+    return;
+  }
+
+  const expiresMs = new Date(account.expiresAt).getTime();
+
+  if (Number.isNaN(expiresMs) || expiresMs - Date.now() > 60_000) {
+    return;
+  }
+
+  await refreshXAccessToken(account);
+};
+
 const uploadXMedia = async (
   image: ParsedDataUrl,
   account: SocialAccountConfig,
@@ -538,29 +662,52 @@ const publishX = async (
   account: SocialAccountConfig,
 ) => {
   const image = parsePostImage(post);
-  const mediaId = image ? await uploadXMedia(image, account) : null;
-  const payload = await assertResponseOk(
-    await fetch("https://api.x.com/2/tweets", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${account.accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        text: post.caption || undefined,
-        ...(mediaId
-          ? {
-              media: {
-                media_ids: [mediaId],
-              },
-            }
-          : {}),
-      }),
-    }),
-    "X post publish failed.",
-  );
 
-  return getNestedString(payload, ["data", "id"]) ?? getNestedString(payload, ["id"]);
+  const runOnce = async () => {
+    const mediaId = image ? await uploadXMedia(image, account) : null;
+    const payload = await assertResponseOk(
+      await fetch("https://api.x.com/2/tweets", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${account.accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          text: post.caption || undefined,
+          ...(mediaId
+            ? {
+                media: {
+                  media_ids: [mediaId],
+                },
+              }
+            : {}),
+        }),
+      }),
+      "X post publish failed.",
+    );
+
+    return (
+      getNestedString(payload, ["data", "id"]) ?? getNestedString(payload, ["id"])
+    );
+  };
+
+  await ensureFreshXToken(account);
+
+  try {
+    return await runOnce();
+  } catch (error) {
+    // Token may have expired mid-flight (or the stored expiry was unknown);
+    // refresh once and retry before surfacing the failure.
+    if (
+      isXRefreshable(account) &&
+      (error as { status?: number }).status === 401
+    ) {
+      await refreshXAccessToken(account);
+      return runOnce();
+    }
+
+    throw error;
+  }
 };
 
 const publishDirectly = async (
@@ -632,7 +779,7 @@ export const publishScheduledSocialPost = async (
   post: DbScheduledSocialPostWithCreatorRow,
   options: PublishOptions = {},
 ): Promise<PublishResult> => {
-  const account = await findConfiguredAccount(post.platform);
+  const account = await resolveAccountForPost(post);
 
   if (!account) {
     if (env.socialPublishWebhookUrl) {

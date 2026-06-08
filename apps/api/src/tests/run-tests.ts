@@ -353,6 +353,7 @@ describe("8. Scheduled Social Posts", () => {
     const row: DbScheduledSocialPostRow = {
       id: nanoid(),
       platform: "linkedin",
+      account_id: null,
       caption: "Scheduled OpsUI post",
       image_data_url: "data:image/png;base64,abc",
       image_name: "post.png",
@@ -393,45 +394,68 @@ describe("8. Scheduled Social Posts", () => {
     assert.equal((await adapter.listDueScheduledSocialPosts("2026-06-01T00:02:00.000Z", 10)).length, 0);
   });
 
-  it("stores, updates, and disconnects social accounts", async () => {
+  it("stores multiple accounts per platform, edits by id, refreshes, disconnects", async () => {
     const now = new Date().toISOString();
-    const row: DbSocialAccountRow = {
-      id: nanoid(),
-      platform: "facebook",
-      display_name: "OpsUI Facebook",
-      account_id: "page-1",
-      access_token: "token-1",
+    const accountAu: DbSocialAccountRow = {
+      id: "twitter-au",
+      platform: "twitter",
+      display_name: "X — AU",
+      account_id: "@OpsuiAU",
+      access_token: "token-au",
       token_type: "Bearer",
       expires_at: null,
-      scopes: "pages_manage_posts",
+      scopes: "tweet.write",
       metadata_json: "{}",
       active: 1,
       created_by_user_id: admin.id,
       created_at: now,
       updated_at: now,
     };
+    const twitterAccounts = async () =>
+      (await adapter.listSocialAccounts()).filter(
+        (account) => account.platform === "twitter",
+      );
 
-    await adapter.upsertSocialAccount(row);
-    assert.equal((await adapter.listSocialAccounts()).length, 1);
-    assert.equal(
-      (await adapter.findSocialAccountByPlatform("facebook"))!.display_name,
-      "OpsUI Facebook",
-    );
-
+    await adapter.upsertSocialAccount(accountAu);
     await adapter.upsertSocialAccount({
-      ...row,
-      id: nanoid(),
-      display_name: "OpsUI Facebook Updated",
-      access_token: "token-2",
-      updated_at: new Date().toISOString(),
+      ...accountAu,
+      id: "twitter-nz",
+      display_name: "X — NZ",
+      account_id: "@OpsuiNZ",
+      access_token: "token-nz",
     });
 
-    const updated = await adapter.findSocialAccountByPlatform("facebook");
+    // Two X accounts coexist on the same platform.
+    assert.equal((await twitterAccounts()).length, 2);
 
-    assert.ok(updated);
-    assert.equal(updated!.display_name, "OpsUI Facebook Updated");
-    assert.equal(updated!.access_token, "token-2");
-    assert.ok(await adapter.deleteSocialAccount(updated!.id));
-    assert.equal(await adapter.findSocialAccountByPlatform("facebook"), null);
+    // Editing by id updates in place (no third row).
+    await adapter.upsertSocialAccount({
+      ...accountAu,
+      display_name: "X — AU (updated)",
+      access_token: "token-au-2",
+      updated_at: new Date().toISOString(),
+    });
+    const editedAu = await adapter.findSocialAccountById("twitter-au");
+    assert.ok(editedAu);
+    assert.equal(editedAu!.display_name, "X — AU (updated)");
+    assert.equal(editedAu!.access_token, "token-au-2");
+    assert.equal((await twitterAccounts()).length, 2);
+
+    // Token refresh persistence.
+    await adapter.updateSocialAccountTokens("twitter-au", {
+      accessToken: "token-au-refreshed",
+      expiresAt: "2030-01-01T00:00:00.000Z",
+      metadataJson: JSON.stringify({ refreshToken: "refresh-au" }),
+    });
+    const refreshed = await adapter.findSocialAccountById("twitter-au");
+    assert.equal(refreshed!.access_token, "token-au-refreshed");
+    assert.equal(refreshed!.expires_at, "2030-01-01T00:00:00.000Z");
+    assert.match(refreshed!.metadata_json, /refresh-au/);
+
+    // Disconnecting one leaves the other connected.
+    assert.ok(await adapter.deleteSocialAccount("twitter-au"));
+    const remaining = await twitterAccounts();
+    assert.equal(remaining.length, 1);
+    assert.equal(remaining[0].id, "twitter-nz");
   });
 });

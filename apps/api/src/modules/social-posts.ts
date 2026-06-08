@@ -25,10 +25,28 @@ import {
 } from "./social-publisher.js";
 import type { DbScheduledSocialPostWithCreatorRow } from "../db/adapter.js";
 
+const parseStoredRefreshToken = (
+  metadataJson: string | undefined,
+): string | null => {
+  if (!metadataJson) {
+    return null;
+  }
+
+  try {
+    const metadata = JSON.parse(metadataJson) as { refreshToken?: unknown };
+    return typeof metadata.refreshToken === "string" && metadata.refreshToken
+      ? metadata.refreshToken
+      : null;
+  } catch {
+    return null;
+  }
+};
+
 const toScheduledSocialPost = (row: DbScheduledSocialPostWithCreatorRow) =>
   scheduledSocialPostSchema.parse({
     id: row.id,
     platform: row.platform,
+    accountId: row.account_id,
     caption: row.caption,
     imageName: row.image_name,
     thumbnailDataUrl: row.thumbnail_data_url,
@@ -60,6 +78,7 @@ const toSocialAccount = (
     accountId: account.accountId,
     connected: Boolean(account.accessToken),
     source: account.source,
+    hasRefreshToken: Boolean(account.refreshToken),
     expiresAt: account.expiresAt,
     createdByUserId: account.createdByUserId,
     createdByUserName: account.createdByUserName,
@@ -153,8 +172,21 @@ export const registerSocialPostRoutes = (
 
       const input = connectSocialAccountInputSchema.parse(request.body);
       const timestamp = new Date().toISOString();
+      // Editing an existing account keeps its id; a new connection gets a fresh
+      // id so multiple accounts can coexist on the same platform.
+      const existing = input.id
+        ? await storage.findSocialAccountById(input.id)
+        : null;
+      const existingRefreshToken = parseStoredRefreshToken(
+        existing?.metadata_json,
+      );
+      // undefined -> keep existing refresh token; null -> clear; string -> set.
+      const refreshToken =
+        input.refreshToken !== undefined
+          ? input.refreshToken
+          : existingRefreshToken;
       const row: DbSocialAccountRow = {
-        id: `${input.platform}-${nanoid()}`,
+        id: input.id ?? `${input.platform}-${nanoid()}`,
         platform: input.platform,
         display_name: input.displayName,
         account_id: input.accountId,
@@ -162,10 +194,12 @@ export const registerSocialPostRoutes = (
         token_type: input.tokenType ?? "Bearer",
         expires_at: input.expiresAt ?? null,
         scopes: input.scopes ?? null,
-        metadata_json: "{}",
+        metadata_json: refreshToken
+          ? JSON.stringify({ refreshToken })
+          : "{}",
         active: 1,
-        created_by_user_id: request.user.id,
-        created_at: timestamp,
+        created_by_user_id: existing?.created_by_user_id ?? request.user.id,
+        created_at: existing?.created_at ?? timestamp,
         updated_at: timestamp,
       };
 
@@ -236,6 +270,7 @@ export const registerSocialPostRoutes = (
       const rows: DbScheduledSocialPostRow[] = input.posts.map((post) => ({
         id: `${post.platform}-${nanoid()}`,
         platform: post.platform,
+        account_id: post.accountId ?? null,
         caption: post.caption.trim(),
         image_data_url: input.imageDataUrl ?? null,
         image_name: input.imageName ?? null,
@@ -271,6 +306,7 @@ export const registerSocialPostRoutes = (
       const rows: DbScheduledSocialPostRow[] = input.posts.map((post) => ({
         id: `${post.platform}-${nanoid()}`,
         platform: post.platform,
+        account_id: post.accountId ?? null,
         caption: post.caption.trim(),
         image_data_url: input.imageDataUrl ?? null,
         image_name: input.imageName ?? null,

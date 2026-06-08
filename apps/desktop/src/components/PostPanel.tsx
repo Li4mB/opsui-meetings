@@ -44,6 +44,7 @@ type SocialAccountForm = {
   displayName: string;
   accountId: string;
   accessToken: string;
+  refreshToken: string;
   expiresAt: string;
 };
 
@@ -150,10 +151,17 @@ const socialPlatforms = [
   },
 ] as const satisfies readonly PlatformMeta[];
 
-const platformIds = socialPlatforms.map((platform) => platform.id);
 const platformById = Object.fromEntries(
   socialPlatforms.map((platform) => [platform.id, platform]),
 ) as Record<SocialPlatform, PlatformMeta>;
+
+// Platforms offered in the composer. Facebook and Instagram are hidden but
+// their data and code paths are kept intact.
+const visiblePlatformIds: SocialPlatform[] = ["twitter", "linkedin"];
+const visibleSocialPlatforms = socialPlatforms.filter((platform) =>
+  visiblePlatformIds.includes(platform.id),
+);
+
 const maxCaptionLength = 4000;
 
 const defaultCaptionPrompt =
@@ -314,19 +322,19 @@ const buildFallbackStrategy = (source: string): AiPostContent => {
   };
 };
 
-const createDrafts = (caption: string): Record<SocialPlatform, SocialPostDraft> =>
-  Object.fromEntries(
-    platformIds.map((platform) => [
-      platform,
-      {
-        platform,
-        caption,
-        customized: false,
-        tweakInstruction: "",
-        isTweaking: false,
-      },
-    ]),
-  ) as Record<SocialPlatform, SocialPostDraft>;
+// Drafts are keyed by account id. A draft only needs to exist once a target
+// account is customised or tweaked; otherwise the card falls back to the master
+// caption.
+const createDraft = (
+  platform: SocialPlatform,
+  caption: string,
+): SocialPostDraft => ({
+  platform,
+  caption,
+  customized: false,
+  tweakInstruction: "",
+  isTweaking: false,
+});
 
 const getUserTimezone = () => {
   try {
@@ -351,6 +359,7 @@ const createSocialAccountForm = (
   displayName: account?.displayName ?? platformById[platform].label,
   accountId: account?.accountId ?? "",
   accessToken: "",
+  refreshToken: "",
   expiresAt: account?.expiresAt
     ? formatDateTimeLocalValue(new Date(account.expiresAt))
     : "",
@@ -532,8 +541,8 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
   const [imageStyle, setImageStyle] = useState<AiPostImageStyle>(
     getInitialImageStyle,
   );
-  const [selectedPlatforms, setSelectedPlatforms] = useState<SocialPlatform[]>([]);
-  const [drafts, setDrafts] = useState(createDrafts(""));
+  const [selectedAccountIds, setSelectedAccountIds] = useState<string[]>([]);
+  const [drafts, setDrafts] = useState<Record<string, SocialPostDraft>>({});
   const [isGeneratingCaption, setIsGeneratingCaption] = useState(false);
   const [isGeneratingImage, setIsGeneratingImage] = useState(false);
   const [isSchedulingPost, setIsSchedulingPost] = useState(false);
@@ -545,8 +554,9 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
   const [socialAccounts, setSocialAccounts] = useState<SocialAccount[]>([]);
   const [isSocialAccountsLoading, setIsSocialAccountsLoading] = useState(false);
   const [connectPlatform, setConnectPlatform] = useState<SocialPlatform | null>(null);
+  const [editingAccountId, setEditingAccountId] = useState<string | null>(null);
   const [accountForm, setAccountForm] = useState<SocialAccountForm>(() =>
-    createSocialAccountForm("facebook"),
+    createSocialAccountForm("twitter"),
   );
   const [isSavingSocialAccount, setIsSavingSocialAccount] = useState(false);
   const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
@@ -569,7 +579,6 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
       }).format(new Date()),
     [],
   );
-  const selectedAll = selectedPlatforms.length === platformIds.length;
   const activeHashtags = captionStrategy?.hashtagBank.length
     ? captionStrategy.hashtagBank
     : fallbackHashtags;
@@ -591,16 +600,37 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
         : null,
     [draggedScheduledPostId, scheduledPosts],
   );
-  const socialAccountByPlatform = useMemo(
+  const accountById = useMemo(
     () =>
       Object.fromEntries(
-        socialAccounts.map((account) => [account.platform, account]),
-      ) as Partial<Record<SocialPlatform, SocialAccount>>,
+        socialAccounts.map((account) => [account.id, account]),
+      ) as Record<string, SocialAccount>,
     [socialAccounts],
   );
-  const connectedPlatformCount = socialPlatforms.filter(
-    (platform) => socialAccountByPlatform[platform.id]?.connected,
-  ).length;
+  // Accounts shown in the account list, grouped by visible platform.
+  const accountsByVisiblePlatform = useMemo(
+    () =>
+      Object.fromEntries(
+        visiblePlatformIds.map((platform) => [
+          platform,
+          socialAccounts.filter((account) => account.platform === platform),
+        ]),
+      ) as Record<SocialPlatform, SocialAccount[]>,
+    [socialAccounts],
+  );
+  // Connected accounts on visible platforms are the selectable posting targets.
+  const connectedAccounts = useMemo(
+    () =>
+      socialAccounts.filter(
+        (account) =>
+          account.connected && visiblePlatformIds.includes(account.platform),
+      ),
+    [socialAccounts],
+  );
+  const connectedAccountCount = connectedAccounts.length;
+  const selectedAll =
+    connectedAccounts.length > 0 &&
+    selectedAccountIds.length === connectedAccounts.length;
   const queueMonthLabel = useMemo(
     () =>
       new Intl.DateTimeFormat(undefined, {
@@ -732,46 +762,37 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
     });
   };
 
-  const syncDraftCaptions = (caption: string) => {
-    setDrafts((current) =>
-      Object.fromEntries(
-        platformIds.map((platform) => {
-          const draft = current[platform];
-
-          return [
-            platform,
-            draft.customized
-              ? draft
-              : {
-                  ...draft,
-                  caption,
-                },
-          ];
-        }),
-      ) as Record<SocialPlatform, SocialPostDraft>,
-    );
+  // A customised per-account draft keeps its own caption; otherwise the card
+  // falls back to the live master caption.
+  const getDraftCaption = (accountId: string) => {
+    const draft = drafts[accountId];
+    return draft?.customized ? draft.caption : masterCaption;
   };
 
   const applyCaptionStrategy = (strategy: AiPostContent, notice: string) => {
     setCaptionStrategy(strategy);
     setMasterCaption(strategy.caption);
-    setDrafts(createDrafts(strategy.caption));
+    setDrafts({});
     setSaveNotice(notice);
   };
 
   const handleMasterCaptionChange = (caption: string) => {
     setMasterCaption(caption);
-    syncDraftCaptions(caption);
   };
 
-  const openSocialAccountDialog = (platform: SocialPlatform) => {
+  const openSocialAccountDialog = (
+    platform: SocialPlatform,
+    account?: SocialAccount,
+  ) => {
     setConnectPlatform(platform);
-    setAccountForm(createSocialAccountForm(platform, socialAccountByPlatform[platform]));
+    setEditingAccountId(account?.id ?? null);
+    setAccountForm(createSocialAccountForm(platform, account));
   };
 
   const closeSocialAccountDialog = () => {
     setConnectPlatform(null);
-    setAccountForm(createSocialAccountForm("facebook"));
+    setEditingAccountId(null);
+    setAccountForm(createSocialAccountForm("twitter"));
   };
 
   const handleSaveSocialAccount = async () => {
@@ -793,21 +814,28 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
       return;
     }
 
+    const refreshToken = accountForm.refreshToken.trim();
+
     setIsSavingSocialAccount(true);
 
     try {
       const response = await connectSocialAccount(authToken, {
+        ...(editingAccountId ? { id: editingAccountId } : {}),
         platform: connectPlatform,
         displayName,
         accountId,
         accessToken,
+        // undefined keeps any existing refresh token when editing.
+        refreshToken: refreshToken || undefined,
         expiresAt: accountForm.expiresAt
           ? new Date(accountForm.expiresAt).toISOString()
           : null,
       });
 
       setSocialAccounts(response.accounts);
-      setSaveNotice(`${platformById[connectPlatform].label} account connected.`);
+      setSaveNotice(
+        `${displayName} ${editingAccountId ? "updated" : "connected"}.`,
+      );
       closeSocialAccountDialog();
     } catch (error) {
       setSaveNotice(
@@ -820,19 +848,13 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
     }
   };
 
-  const handleDisconnectSocialAccount = async (platform: SocialPlatform) => {
-    const account = socialAccountByPlatform[platform];
-
-    if (!account) {
-      return;
-    }
-
+  const handleDisconnectSocialAccount = async (account: SocialAccount) => {
     if (account.source === "environment") {
       setSaveNotice("This account is managed by API environment variables.");
       return;
     }
 
-    if (!window.confirm(`Disconnect ${platformById[platform].label}?`)) {
+    if (!window.confirm(`Disconnect ${account.displayName}?`)) {
       return;
     }
 
@@ -840,12 +862,15 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
       const response = await deleteSocialAccount(authToken, account.id);
 
       setSocialAccounts(response.accounts);
-      setSaveNotice(`${platformById[platform].label} account disconnected.`);
+      setSelectedAccountIds((current) =>
+        current.filter((id) => id !== account.id),
+      );
+      setSaveNotice(`${account.displayName} disconnected.`);
     } catch (error) {
       setSaveNotice(
         error instanceof ApiError
           ? error.message
-          : `Unable to disconnect ${platformById[platform].label}.`,
+          : `Unable to disconnect ${account.displayName}.`,
       );
     }
   };
@@ -982,57 +1007,71 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
     setSaveNotice("Image download started.");
   };
 
-  const togglePlatform = (platform: SocialPlatform) => {
-    setSelectedPlatforms((current) =>
-      current.includes(platform)
-        ? current.filter((item) => item !== platform)
-        : [...current, platform],
+  const toggleAccount = (accountId: string) => {
+    setSelectedAccountIds((current) =>
+      current.includes(accountId)
+        ? current.filter((item) => item !== accountId)
+        : [...current, accountId],
     );
   };
 
-  const toggleSelectAllPlatforms = () => {
-    setSelectedPlatforms(selectedAll ? [] : [...platformIds]);
+  const toggleSelectAllAccounts = () => {
+    setSelectedAccountIds(
+      selectedAll ? [] : connectedAccounts.map((account) => account.id),
+    );
   };
 
-  const updateDraft = (platform: SocialPlatform, patch: Partial<SocialPostDraft>) => {
-    setDrafts((current) => ({
-      ...current,
-      [platform]: {
-        ...current[platform],
-        ...patch,
-      },
-    }));
+  const updateDraft = (accountId: string, patch: Partial<SocialPostDraft>) => {
+    setDrafts((current) => {
+      const existing =
+        current[accountId] ??
+        createDraft(
+          accountById[accountId]?.platform ?? "twitter",
+          masterCaption,
+        );
+
+      return {
+        ...current,
+        [accountId]: { ...existing, ...patch },
+      };
+    });
   };
 
-  const handleTweakPlatformCaption = async (platform: SocialPlatform) => {
-    const draft = drafts[platform];
-    const instruction = draft.tweakInstruction.trim();
+  const handleTweakAccountCaption = async (accountId: string) => {
+    const account = accountById[accountId];
 
-    if (!instruction) {
-      setSaveNotice(`Add a ${platformById[platform].label} tweak first.`);
+    if (!account) {
       return;
     }
 
-    updateDraft(platform, { isTweaking: true });
+    const draft = drafts[accountId];
+    const instruction = (draft?.tweakInstruction ?? "").trim();
+
+    if (!instruction) {
+      setSaveNotice(`Add a ${account.displayName} tweak first.`);
+      return;
+    }
+
+    updateDraft(accountId, { isTweaking: true });
 
     try {
       const generated = await generatePostContent(authToken, {
         prompt: captionPrompt,
-        platform,
-        currentCaption: draft.caption || masterCaption,
+        platform: account.platform,
+        currentCaption: getDraftCaption(accountId) || masterCaption,
         tweakInstruction: instruction,
         imageNames: postImage ? [postImage.name] : [],
         tags: activeHashtags,
       });
 
-      updateDraft(platform, {
+      updateDraft(accountId, {
         caption: generated.caption,
         customized: true,
         isTweaking: false,
       });
-      setSaveNotice(`${platformById[platform].label} caption tweaked.`);
+      setSaveNotice(`${account.displayName} caption tweaked.`);
     } catch (error) {
-      updateDraft(platform, { isTweaking: false });
+      updateDraft(accountId, { isTweaking: false });
       setSaveNotice(
         error instanceof ApiError
           ? `Caption tweak failed: ${error.message}`
@@ -1200,9 +1239,34 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
     };
   }, [calendarDays, draggedScheduledPostId, handleReschedulePost, scheduledPosts]);
 
+  const buildSelectedPosts = () =>
+    selectedAccountIds
+      .map((accountId) => {
+        const account = accountById[accountId];
+
+        if (!account) {
+          return null;
+        }
+
+        return {
+          platform: account.platform,
+          accountId,
+          caption: getDraftCaption(accountId).trim(),
+        };
+      })
+      .filter(
+        (
+          post,
+        ): post is {
+          platform: SocialPlatform;
+          accountId: string;
+          caption: string;
+        } => post !== null,
+      );
+
   const validatePostContent = (action: "scheduling" | "publishing") => {
-    if (!selectedPlatforms.length) {
-      setSaveNotice(`Select at least one platform before ${action}.`);
+    if (!selectedAccountIds.length) {
+      setSaveNotice(`Select at least one account before ${action}.`);
       return false;
     }
 
@@ -1233,16 +1297,12 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
       return;
     }
 
-    const missingPlatforms = selectedPlatforms.filter(
-      (platform) => !socialAccountByPlatform[platform]?.connected,
+    const missingAccounts = selectedAccountIds.filter(
+      (id) => !accountById[id]?.connected,
     );
 
-    if (missingPlatforms.length) {
-      setSaveNotice(
-        `Connect ${missingPlatforms
-          .map((platform) => platformById[platform].label)
-          .join(", ")} before pushing.`,
-      );
+    if (missingAccounts.length) {
+      setSaveNotice("Reconnect the selected account(s) before pushing.");
       return;
     }
 
@@ -1251,10 +1311,7 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
     try {
       const thumbnailDataUrl = postImage ? await buildCalendarImageThumbnail(postImage.url) : null;
       const response = await publishSocialPosts(authToken, {
-        posts: selectedPlatforms.map((platform) => ({
-          platform,
-          caption: (drafts[platform].caption || masterCaption).trim(),
-        })),
+        posts: buildSelectedPosts(),
         imageDataUrl: postImage?.url ?? null,
         imageName: postImage?.name ?? null,
         thumbnailDataUrl,
@@ -1310,10 +1367,7 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
       const scheduledFor = scheduledDate.toISOString();
       const thumbnailDataUrl = postImage ? await buildCalendarImageThumbnail(postImage.url) : null;
       const response = await scheduleSocialPosts(authToken, {
-        posts: selectedPlatforms.map((platform) => ({
-          platform,
-          caption: (drafts[platform].caption || masterCaption).trim(),
-        })),
+        posts: buildSelectedPosts(),
         imageDataUrl: postImage?.url ?? null,
         imageName: postImage?.name ?? null,
         thumbnailDataUrl,
@@ -1326,7 +1380,7 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
       setQueueMonth(new Date(scheduledDate.getFullYear(), scheduledDate.getMonth(), 1));
       setIsScheduleModalOpen(false);
       setSaveNotice(
-        `${selectedPlatforms.length} platform post${selectedPlatforms.length === 1 ? "" : "s"} scheduled for ${formatScheduledDateTime(scheduledFor, userTimezone)}.`,
+        `${selectedAccountIds.length} post${selectedAccountIds.length === 1 ? "" : "s"} scheduled for ${formatScheduledDateTime(scheduledFor, userTimezone)}.`,
       );
     } catch (error) {
       setSaveNotice(
@@ -1348,13 +1402,13 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
             <h1 className="post-title">Build OpsUI social posts</h1>
             <p className="post-subtitle">
               Generate caption strategy and portrait creative, then publish the post to
-              Facebook, LinkedIn, X/Twitter, and Instagram.
+              your connected LinkedIn and X/Twitter accounts.
             </p>
           </div>
           <div className="post-hero__pill">
             {isSocialAccountsLoading
               ? "Checking accounts"
-              : `${connectedPlatformCount}/${platformIds.length} accounts connected`}
+              : `${connectedAccountCount} account${connectedAccountCount === 1 ? "" : "s"} connected`}
           </div>
         </div>
 
@@ -1496,72 +1550,92 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
             <section className="post-section">
               <div className="post-section__header">
                 <span className="eyebrow">Channels</span>
-                <h2>Select platforms</h2>
+                <h2>Select accounts</h2>
               </div>
               <div className="post-platform-selector">
                 <button
                   className={`post-platform-btn ${selectedAll ? "post-platform-btn--active" : ""}`}
-                  onClick={toggleSelectAllPlatforms}
+                  disabled={!connectedAccounts.length}
+                  onClick={toggleSelectAllAccounts}
                   type="button"
                 >
                   Select all
                 </button>
-                {socialPlatforms.map((platform) => (
+                {connectedAccounts.map((account) => (
                   <button
-                    aria-pressed={selectedPlatforms.includes(platform.id)}
-                    className={`post-platform-btn ${selectedPlatforms.includes(platform.id) ? "post-platform-btn--active" : ""}`}
-                    key={platform.id}
-                    onClick={() => togglePlatform(platform.id)}
+                    aria-pressed={selectedAccountIds.includes(account.id)}
+                    className={`post-platform-btn ${selectedAccountIds.includes(account.id) ? "post-platform-btn--active" : ""}`}
+                    key={account.id}
+                    onClick={() => toggleAccount(account.id)}
                     type="button"
                   >
-                    <span>{platform.shortLabel}</span>
-                    {platform.label}
+                    <span>{platformById[account.platform].shortLabel}</span>
+                    {account.displayName}
                   </button>
                 ))}
               </div>
               <div className="post-field-meta">
-                {selectedPlatforms.length} of {platformIds.length} selected
+                {connectedAccounts.length
+                  ? `${selectedAccountIds.length} of ${connectedAccountCount} selected`
+                  : "Connect an account below to start posting"}
               </div>
               <div className="post-account-list">
-                {socialPlatforms.map((platform) => {
-                  const account = socialAccountByPlatform[platform.id];
-                  const connected = Boolean(account?.connected);
+                {visibleSocialPlatforms.map((platform) => {
+                  const accounts = accountsByVisiblePlatform[platform.id] ?? [];
 
                   return (
-                    <div
-                      className={`post-account-row ${connected ? "post-account-row--connected" : ""}`}
-                      key={platform.id}
-                    >
-                      <div className="post-account-row__main">
-                        <span className="post-account-mark">{platform.shortLabel}</span>
-                        <div>
-                          <strong>{account?.displayName ?? platform.label}</strong>
-                          <small>{account?.accountId ?? "No posting target"}</small>
-                        </div>
-                      </div>
-                      <div className="post-account-row__side">
-                        <span className="post-account-status">
-                          {connected ? "Connected" : "Not connected"}
-                        </span>
-                        {canManageSocialAccounts ? (
-                          <div className="post-account-actions">
-                            <button
-                              onClick={() => openSocialAccountDialog(platform.id)}
-                              type="button"
-                            >
-                              {connected ? "Edit" : "Connect"}
-                            </button>
-                            {connected && account?.source === "database" ? (
-                              <button
-                                onClick={() => void handleDisconnectSocialAccount(platform.id)}
-                                type="button"
-                              >
-                                Disconnect
-                              </button>
+                    <div className="post-account-group" key={platform.id}>
+                      {accounts.map((account) => (
+                        <div
+                          className={`post-account-row ${account.connected ? "post-account-row--connected" : ""}`}
+                          key={account.id}
+                        >
+                          <div className="post-account-row__main">
+                            <span className="post-account-mark">{platform.shortLabel}</span>
+                            <div>
+                              <strong>{account.displayName}</strong>
+                              <small>
+                                {account.accountId}
+                                {account.hasRefreshToken ? " · auto-refresh on" : ""}
+                              </small>
+                            </div>
+                          </div>
+                          <div className="post-account-row__side">
+                            <span className="post-account-status">
+                              {account.source === "environment"
+                                ? "Env"
+                                : account.connected
+                                  ? "Connected"
+                                  : "Not connected"}
+                            </span>
+                            {canManageSocialAccounts && account.source === "database" ? (
+                              <div className="post-account-actions">
+                                <button
+                                  onClick={() => openSocialAccountDialog(platform.id, account)}
+                                  type="button"
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  onClick={() => void handleDisconnectSocialAccount(account)}
+                                  type="button"
+                                >
+                                  Disconnect
+                                </button>
+                              </div>
                             ) : null}
                           </div>
-                        ) : null}
-                      </div>
+                        </div>
+                      ))}
+                      {canManageSocialAccounts ? (
+                        <button
+                          className="post-account-add"
+                          onClick={() => openSocialAccountDialog(platform.id)}
+                          type="button"
+                        >
+                          + Add {platform.label} account
+                        </button>
+                      ) : null}
                     </div>
                   );
                 })}
@@ -1676,7 +1750,7 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
             <div className="post-schedule-actions">
               <button
                 className="post-schedule-btn"
-                disabled={!selectedPlatforms.length || isSchedulingPost || isPublishingPost}
+                disabled={!selectedAccountIds.length || isSchedulingPost || isPublishingPost}
                 onClick={handleOpenSchedule}
                 type="button"
               >
@@ -1684,7 +1758,7 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
               </button>
               <button
                 className="post-push-btn"
-                disabled={!selectedPlatforms.length || isPublishingPost || isSchedulingPost}
+                disabled={!selectedAccountIds.length || isPublishingPost || isSchedulingPost}
                 onClick={() => void handlePush()}
                 type="button"
               >
@@ -1693,26 +1767,33 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
             </div>
           </div>
 
-          {selectedPlatforms.length ? (
+          {selectedAccountIds.length ? (
             <div className="post-platform-grid">
-              {selectedPlatforms.map((platform) => {
-                const meta = platformById[platform];
-                const draft = drafts[platform];
-                const overLimit = draft.caption.length > meta.captionLimit;
+              {selectedAccountIds.map((accountId) => {
+                const account = accountById[accountId];
+
+                if (!account) {
+                  return null;
+                }
+
+                const meta = platformById[account.platform];
+                const caption = getDraftCaption(accountId);
+                const draft = drafts[accountId];
+                const overLimit = caption.length > meta.captionLimit;
 
                 return (
-                  <article className="post-platform-card" key={platform}>
+                  <article className="post-platform-card" key={accountId}>
                     <div className="post-platform-card__top">
                       <div className="post-platform-card__mark">{meta.shortLabel}</div>
                       <div>
-                        <strong>{meta.label}</strong>
-                        <span>{meta.previewMeta}</span>
+                        <strong>{account.displayName}</strong>
+                        <span>{account.accountId}</span>
                       </div>
                     </div>
 
                     {postImage ? (
                       <div className="post-platform-card__image">
-                        <img alt={`${meta.label} preview`} src={postImage.url} />
+                        <img alt={`${account.displayName} preview`} src={postImage.url} />
                       </div>
                     ) : (
                       <div className="post-preview__empty-image">No image selected</div>
@@ -1724,42 +1805,42 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
                         className="post-platform-caption"
                         maxLength={maxCaptionLength}
                         onChange={(event) =>
-                          updateDraft(platform, {
+                          updateDraft(accountId, {
                             caption: event.target.value,
                             customized: true,
                           })
                         }
                         rows={8}
-                        value={draft.caption}
+                        value={caption}
                       />
                       <small className={overLimit ? "post-platform-limit--warn" : undefined}>
-                        {draft.caption.length}/{meta.captionLimit} recommended
+                        {caption.length}/{meta.captionLimit} recommended
                       </small>
                     </label>
 
                     <label className="post-platform-tweak">
-                      <span>Tweak prompt for {meta.label}</span>
+                      <span>Tweak prompt for {account.displayName}</span>
                       <textarea
                         maxLength={2000}
                         onChange={(event) =>
-                          updateDraft(platform, {
+                          updateDraft(accountId, {
                             tweakInstruction: event.target.value,
                           })
                         }
                         placeholder={`Example: Make this more ${meta.label}-native without changing the core point.`}
                         rows={3}
-                        value={draft.tweakInstruction}
+                        value={draft?.tweakInstruction ?? ""}
                       />
                     </label>
 
                     <div className="post-platform-card__actions">
                       <span>{meta.styleHint}</span>
                       <button
-                        disabled={draft.isTweaking}
-                        onClick={() => void handleTweakPlatformCaption(platform)}
+                        disabled={draft?.isTweaking ?? false}
+                        onClick={() => void handleTweakAccountCaption(accountId)}
                         type="button"
                       >
-                        {draft.isTweaking ? "Tweaking..." : "Tweak caption"}
+                        {draft?.isTweaking ? "Tweaking..." : "Tweak caption"}
                       </button>
                     </div>
                   </article>
@@ -1768,7 +1849,7 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
             </div>
           ) : (
             <div className="post-platform-empty">
-              Select one or more platforms to see final previews.
+              Select one or more accounts to see final previews.
             </div>
           )}
         </section>
@@ -1879,6 +1960,13 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
                             <span>{meta.label}</span>
                             <strong>{formatScheduledTime(event.scheduledFor, event.timezone)}</strong>
                             <small>{event.status.replace(/_/g, " ")}</small>
+                            {(event.status === "failed" ||
+                              event.status === "connection_required") &&
+                            event.statusMessage ? (
+                              <small className="post-calendar-event__error">
+                                {event.statusMessage}
+                              </small>
+                            ) : null}
                           </div>
                           <div className="post-calendar-event__controls">
                             <input
@@ -1973,7 +2061,9 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
             <div className="post-schedule-dialog__header">
               <div>
                 <span className="eyebrow">Account connection</span>
-                <h2 id="post-account-title">{platformById[connectPlatform].label}</h2>
+                <h2 id="post-account-title">
+                  {editingAccountId ? "Edit" : "Add"} {platformById[connectPlatform].label} account
+                </h2>
               </div>
               <button
                 className="post-schedule-dialog__close"
@@ -2033,6 +2123,31 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
                   value={accountForm.accessToken}
                 />
               </label>
+              {connectPlatform === "twitter" ? (
+                <label>
+                  Refresh token (optional)
+                  <input
+                    maxLength={8000}
+                    onChange={(event) =>
+                      setAccountForm((current) => ({
+                        ...current,
+                        refreshToken: event.target.value,
+                      }))
+                    }
+                    placeholder={
+                      editingAccountId
+                        ? "Leave blank to keep the saved refresh token"
+                        : "Paste to enable automatic token refresh"
+                    }
+                    type="password"
+                    value={accountForm.refreshToken}
+                  />
+                  <small className="post-account-hint">
+                    Enables auto-refresh so you don't re-paste X tokens every ~2 hours.
+                    Set OPSUI_X_CLIENT_ID and OPSUI_X_CLIENT_SECRET on the API.
+                  </small>
+                </label>
+              ) : null}
               <label>
                 Token expiry
                 <input
@@ -2095,8 +2210,8 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
 
             <div className="post-schedule-summary">
               <div>
-                <span>Platforms</span>
-                <strong>{selectedPlatforms.length} selected</strong>
+                <span>Accounts</span>
+                <strong>{selectedAccountIds.length} selected</strong>
               </div>
               <div>
                 <span>Timezone</span>
@@ -2105,8 +2220,10 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
             </div>
 
             <div className="post-schedule-platform-row">
-              {selectedPlatforms.map((platform) => (
-                <span key={platform}>{platformById[platform].label}</span>
+              {selectedAccountIds.map((accountId) => (
+                <span key={accountId}>
+                  {accountById[accountId]?.displayName ?? accountId}
+                </span>
               ))}
             </div>
 

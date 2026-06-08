@@ -125,6 +125,8 @@ export const env = {
   linkedinAccessToken: process.env.OPSUI_LINKEDIN_ACCESS_TOKEN ?? "",
   xAccountId: process.env.OPSUI_X_ACCOUNT_ID ?? "",
   xAccessToken: process.env.OPSUI_X_ACCESS_TOKEN ?? "",
+  xClientId: process.env.OPSUI_X_CLIENT_ID ?? "",
+  xClientSecret: process.env.OPSUI_X_CLIENT_SECRET ?? "",
   loftIngestKey: process.env.OPSUI_LOFT_INGEST_KEY ?? "",
   loftAccessPassword: process.env.OPSUI_LOFT_ACCESS_PASSWORD ?? "0770",
   dbProvider,

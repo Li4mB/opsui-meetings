@@ -146,6 +146,7 @@ const schemaSql = `
   CREATE TABLE IF NOT EXISTS ${scheduledSocialPostsTable} (
     id TEXT PRIMARY KEY,
     platform TEXT NOT NULL CHECK(platform IN ('facebook', 'linkedin', 'twitter', 'instagram')),
+    account_id TEXT,
     caption TEXT NOT NULL,
     image_data_url TEXT,
     image_name TEXT,
@@ -166,7 +167,7 @@ const schemaSql = `
 
   CREATE TABLE IF NOT EXISTS ${socialAccountsTable} (
     id TEXT PRIMARY KEY,
-    platform TEXT NOT NULL UNIQUE CHECK(platform IN ('facebook', 'linkedin', 'twitter', 'instagram')),
+    platform TEXT NOT NULL CHECK(platform IN ('facebook', 'linkedin', 'twitter', 'instagram')),
     display_name TEXT NOT NULL,
     account_id TEXT NOT NULL,
     access_token TEXT NOT NULL,
@@ -198,6 +199,14 @@ const schemaSql = `
     user_id TEXT PRIMARY KEY,
     granted_at TEXT NOT NULL
   );
+
+  -- Migrations for existing databases (idempotent).
+  -- Allow multiple accounts per platform: drop the legacy UNIQUE(platform).
+  ALTER TABLE ${socialAccountsTable}
+    DROP CONSTRAINT IF EXISTS social_accounts_platform_key;
+  -- Reference the specific account a scheduled post targets.
+  ALTER TABLE ${scheduledSocialPostsTable}
+    ADD COLUMN IF NOT EXISTS account_id TEXT;
 `;
 
 const selectActiveMeetingsQuery = `
@@ -908,6 +917,7 @@ export const createPostgresAdapter = (): StorageAdapter => {
               INSERT INTO ${scheduledSocialPostsTable} (
                 id,
                 platform,
+                account_id,
                 caption,
                 image_data_url,
                 image_name,
@@ -923,12 +933,13 @@ export const createPostgresAdapter = (): StorageAdapter => {
                 updated_at
               ) VALUES (
                 $1, $2, $3, $4, $5, $6, $7, $8,
-                $9, $10, $11, $12, $13, $14, $15
+                $9, $10, $11, $12, $13, $14, $15, $16
               )
             `,
             [
               row.id,
               row.platform,
+              row.account_id,
               row.caption,
               row.image_data_url,
               row.image_name,
@@ -1059,7 +1070,8 @@ export const createPostgresAdapter = (): StorageAdapter => {
             $1, $2, $3, $4, $5, $6, $7,
             $8, $9, $10, $11, $12, $13
           )
-          ON CONFLICT(platform) DO UPDATE SET
+          ON CONFLICT(id) DO UPDATE SET
+            platform = EXCLUDED.platform,
             display_name = EXCLUDED.display_name,
             account_id = EXCLUDED.account_id,
             access_token = EXCLUDED.access_token,
@@ -1104,6 +1116,25 @@ export const createPostgresAdapter = (): StorageAdapter => {
            AND social_accounts.active = 1
          LIMIT 1`,
         [platform],
+      );
+    },
+
+    async findSocialAccountById(id: string) {
+      return queryRow<DbSocialAccountWithCreatorRow>(
+        `${selectSocialAccountsQuery}
+         WHERE social_accounts.id = $1
+           AND social_accounts.active = 1
+         LIMIT 1`,
+        [id],
+      );
+    },
+
+    async updateSocialAccountTokens(id, patch) {
+      await execute(
+        `UPDATE ${socialAccountsTable}
+         SET access_token = $2, expires_at = $3, metadata_json = $4, updated_at = $5
+         WHERE id = $1`,
+        [id, patch.accessToken, patch.expiresAt, patch.metadataJson, new Date().toISOString()],
       );
     },
 

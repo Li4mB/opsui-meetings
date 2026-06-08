@@ -107,6 +107,7 @@ export type DbSocialPlatform = "facebook" | "linkedin" | "twitter" | "instagram"
 export type DbScheduledSocialPostRow = {
   id: string;
   platform: DbSocialPlatform;
+  account_id: string | null;
   caption: string;
   image_data_url: string | null;
   image_name: string | null;

@@ -3443,7 +3443,47 @@ label {
 
 .post-account-list {
   display: grid;
-  gap: 8px;
+  gap: 14px;
+}
+
+.post-account-group {
+  display: grid;
+  gap: 6px;
+}
+
+.post-account-add {
+  justify-self: start;
+  min-height: 30px;
+  padding: 0 12px;
+  border: 1px dashed rgba(196, 181, 253, 0.3);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.02);
+  color: var(--color-text-secondary);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.post-account-add:hover {
+  border-color: rgba(196, 181, 253, 0.5);
+  color: var(--color-text-primary);
+}
+
+.post-account-hint {
+  display: block;
+  margin-top: 4px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.post-calendar-event__error {
+  color: #fca5a5;
+  font-size: 10px;
+  line-height: 1.35;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
 }
 
 .post-account-row {

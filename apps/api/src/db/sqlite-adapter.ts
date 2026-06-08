@@ -143,6 +143,7 @@ const schemaSql = `
   CREATE TABLE IF NOT EXISTS scheduled_social_posts (
     id TEXT PRIMARY KEY,
     platform TEXT NOT NULL CHECK(platform IN ('facebook', 'linkedin', 'twitter', 'instagram')),
+    account_id TEXT,
     caption TEXT NOT NULL,
     image_data_url TEXT,
     image_name TEXT,
@@ -164,7 +165,7 @@ const schemaSql = `
 
   CREATE TABLE IF NOT EXISTS social_accounts (
     id TEXT PRIMARY KEY,
-    platform TEXT NOT NULL UNIQUE CHECK(platform IN ('facebook', 'linkedin', 'twitter', 'instagram')),
+    platform TEXT NOT NULL CHECK(platform IN ('facebook', 'linkedin', 'twitter', 'instagram')),
     display_name TEXT NOT NULL,
     account_id TEXT NOT NULL,
     access_token TEXT NOT NULL,
@@ -290,6 +291,60 @@ export const createSqliteAdapter = (): StorageAdapter => {
     }
   };
 
+  // Older databases created social_accounts with `platform ... UNIQUE`, which
+  // blocks connecting more than one account per platform. SQLite cannot drop a
+  // column constraint in place, so rebuild the table without the UNIQUE index
+  // when the legacy unique constraint (PRAGMA origin "u") is present.
+  const dropSocialAccountsPlatformUnique = (database: Database.Database) => {
+    const indexes = database
+      .prepare<[], { unique: number; origin: string }>(
+        `PRAGMA index_list('social_accounts')`,
+      )
+      .all();
+    const hasUniqueConstraint = indexes.some(
+      (index) => index.unique === 1 && index.origin === "u",
+    );
+
+    if (!hasUniqueConstraint) {
+      return;
+    }
+
+    database.pragma("foreign_keys = OFF");
+    database.exec(`
+      CREATE TABLE social_accounts_new (
+        id TEXT PRIMARY KEY,
+        platform TEXT NOT NULL CHECK(platform IN ('facebook', 'linkedin', 'twitter', 'instagram')),
+        display_name TEXT NOT NULL,
+        account_id TEXT NOT NULL,
+        access_token TEXT NOT NULL,
+        token_type TEXT,
+        expires_at TEXT,
+        scopes TEXT,
+        metadata_json TEXT NOT NULL DEFAULT '{}',
+        active INTEGER NOT NULL DEFAULT 1,
+        created_by_user_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (created_by_user_id) REFERENCES users(id)
+      );
+      INSERT INTO social_accounts_new (
+        id, platform, display_name, account_id, access_token, token_type,
+        expires_at, scopes, metadata_json, active, created_by_user_id,
+        created_at, updated_at
+      )
+      SELECT
+        id, platform, display_name, account_id, access_token, token_type,
+        expires_at, scopes, metadata_json, active, created_by_user_id,
+        created_at, updated_at
+      FROM social_accounts;
+      DROP TABLE social_accounts;
+      ALTER TABLE social_accounts_new RENAME TO social_accounts;
+      CREATE INDEX IF NOT EXISTS idx_social_accounts_platform
+        ON social_accounts(platform, active);
+    `);
+    database.pragma("foreign_keys = ON");
+  };
+
   return {
     async initialize() {
       if (db) {
@@ -306,6 +361,8 @@ export const createSqliteAdapter = (): StorageAdapter => {
         "country",
         "country TEXT NOT NULL DEFAULT 'Unknown'",
       );
+      ensureColumn(db, "scheduled_social_posts", "account_id", "account_id TEXT");
+      dropSocialAccountsPlatformUnique(db);
     },
 
     async close() {
@@ -882,6 +939,7 @@ export const createSqliteAdapter = (): StorageAdapter => {
         INSERT INTO scheduled_social_posts (
           id,
           platform,
+          account_id,
           caption,
           image_data_url,
           image_name,
@@ -895,13 +953,14 @@ export const createSqliteAdapter = (): StorageAdapter => {
           created_by_user_id,
           created_at,
           updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       const transaction = database.transaction((items: DbScheduledSocialPostRow[]) => {
         for (const row of items) {
           insert.run(
             row.id,
             row.platform,
+            row.account_id,
             row.caption,
             row.image_data_url,
             row.image_name,
@@ -1037,7 +1096,8 @@ export const createSqliteAdapter = (): StorageAdapter => {
           created_at,
           updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(platform) DO UPDATE SET
+        ON CONFLICT(id) DO UPDATE SET
+          platform = excluded.platform,
           display_name = excluded.display_name,
           account_id = excluded.account_id,
           access_token = excluded.access_token,
@@ -1088,6 +1148,37 @@ export const createSqliteAdapter = (): StorageAdapter => {
           )
           .get(platform) ?? null
       );
+    },
+
+    async findSocialAccountById(id) {
+      const database = getDb();
+      return (
+        database
+          .prepare<unknown[], DbSocialAccountWithCreatorRow>(
+            `${selectSocialAccountsQuery}
+             WHERE social_accounts.id = ?
+               AND social_accounts.active = 1
+             LIMIT 1`,
+          )
+          .get(id) ?? null
+      );
+    },
+
+    async updateSocialAccountTokens(id, patch) {
+      const database = getDb();
+      database
+        .prepare(
+          `UPDATE social_accounts
+           SET access_token = ?, expires_at = ?, metadata_json = ?, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(
+          patch.accessToken,
+          patch.expiresAt,
+          patch.metadataJson,
+          new Date().toISOString(),
+          id,
+        );
     },
 
     async deleteSocialAccount(id) {

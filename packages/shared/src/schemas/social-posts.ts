@@ -18,6 +18,7 @@ export const scheduledSocialPostStatusSchema = z.enum([
 
 const scheduleSocialPostDraftSchema = z.object({
   platform: scheduledSocialPlatformSchema,
+  accountId: z.string().trim().min(1).max(240).optional(),
   caption: z.string().max(4000).default(""),
 });
 
@@ -57,6 +58,7 @@ export const rescheduleSocialPostInputSchema = z.object({
 export const scheduledSocialPostSchema = z.object({
   id: z.string(),
   platform: scheduledSocialPlatformSchema,
+  accountId: z.string().nullable(),
   caption: z.string(),
   imageName: z.string().nullable(),
   thumbnailDataUrl: z.string().nullable(),
@@ -90,6 +92,7 @@ export const socialAccountSchema = z.object({
   accountId: z.string(),
   connected: z.boolean(),
   source: socialAccountSourceSchema,
+  hasRefreshToken: z.boolean(),
   expiresAt: z.string().nullable(),
   createdByUserId: z.string().nullable(),
   createdByUserName: z.string().nullable(),
@@ -103,10 +106,12 @@ export const socialAccountsResponseSchema = z.object({
 });
 
 export const connectSocialAccountInputSchema = z.object({
+  id: z.string().trim().min(1).max(240).optional(),
   platform: scheduledSocialPlatformSchema,
   displayName: z.string().trim().min(1).max(120),
   accountId: z.string().trim().min(1).max(240),
   accessToken: z.string().trim().min(1).max(8000),
+  refreshToken: z.string().trim().max(8000).nullable().optional(),
   tokenType: z.string().trim().max(80).nullable().optional(),
   expiresAt: z.string().datetime().nullable().optional(),
   scopes: z.string().trim().max(1000).nullable().optional(),
