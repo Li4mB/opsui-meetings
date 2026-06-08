@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import OpenAI, { toFile } from "openai";
+import OpenAI from "openai";
+import sharp from "sharp";
 import { zodTextFormat } from "openai/helpers/zod";
 import { nanoid } from "nanoid";
 import {
@@ -78,10 +79,6 @@ const readAssetDataUrl = (filePath: string, mimeType: string) => {
   }
 };
 
-const opsUiLogoReferenceDataUrl = readAssetDataUrl(
-  opsUiLogoReferencePath,
-  "image/png",
-);
 
 const opsUiVisualReferences = [
   {
@@ -238,12 +235,14 @@ const opsUiSocialDirection = [
   "Core message: OpsUI helps operational businesses move from manual chaos to clearer control, better visibility, and scalable execution.",
 ].join("\n");
 
-const opsUiLogoDirection = [
-  "Logo rule (reference-lock): if the image needs an OpsUI logo, product logo, brand mark, app icon, watermark, or corner bug, use only the attached OP logo reference and reproduce it verbatim, pixel-for-pixel.",
-  "Treat the OP logo as a fixed, finished asset that is copied and pasted in as-is, not a mark to be generated or redrawn. Preserve exactly its shape, proportions, colours, hex values, letterforms, and aspect ratio. The mark is a flat square purple background with bold white uppercase OP.",
-  "Do not recolour, restyle, redraw, re-render, re-typeset, crop, rotate, distort, simplify, or add gradients, shadows, or glows. Never use the old glowing black OP icon and never invent an alternate OpsUI mark.",
-  "Place the logo flat, upright, and large enough that no detail has to be re-synthesised. If the logo cannot be reproduced faithfully, omit it instead of creating an altered or incorrect logo.",
-].join("\n");
+// The real OP logo is composited onto the image after generation (pixel
+// perfect), so the model must NOT draw one — it only reserves a clean corner.
+const buildLogoReserveDirection = (cornerLabel: string) =>
+  [
+    "Logo rule (added in post-production): do NOT draw, render, paint, recreate, or imagine any OpsUI logo, OP mark, wordmark, app icon, watermark, or brand bug anywhere in the image.",
+    `Leave the ${cornerLabel} corner as a clean, calm, unobstructed area (roughly the corner 20% of the width) with no text, graphics, or busy detail. The official OpsUI logo is composited into that corner afterwards.`,
+    "Any logo you draw would be a duplicate of the real one and must therefore be omitted entirely.",
+  ].join("\n");
 
 const opsUiUiReferenceDirection = [
   "OpsUI UI reference rule (reference-lock): if the image includes any app screen, dashboard, module view, chart, table, navigation, panel, metric card, or other interface element, use the attached OpsUI app screenshots themselves and reproduce them verbatim, pixel-for-pixel.",
@@ -265,7 +264,7 @@ const opsUiPremiumPosterDirection = [
   "Premium enterprise poster style (Apple x Linear x Stripe x high-end SaaS campaign aesthetic): it must look like a billion-dollar enterprise software company advertising to executives on LinkedIn. Make it look real, expensive, and believable.",
   "Mood: minimalistic luxury enterprise, sophisticated B2B SaaS branding, elegant operational-tech atmosphere.",
   "Background: dark near-black fading into deep violet gradients; smooth cinematic gradients; soft radial lighting; soft ambient purple glow; soft bloom; ultra-subtle vignette; realistic screen-space glow; purple edge glow.",
-  "Composition: 1:1 square, ultra high resolution, left-heavy. Top-left: the OpsUI OP logo in its purple square. Left side: a huge oversized bold headline with intentional whitespace. Right side only: an abstract operational visual that balances the typography. Bottom-right: cost emphasis.",
+  "Composition: 1:1 square, ultra high resolution, left-heavy. Top-left: leave a clean empty corner reserved for the OpsUI logo (it is added in post — do not draw it). Left side: a huge oversized bold headline with intentional whitespace. Right side only: an abstract operational visual that balances the typography. Bottom-right: cost emphasis.",
   "Right-side visual: glowing operational geometry only — thin connection lines, network curves, system nodes, architectural arcs, subtle topology graphics, enterprise infrastructure symbolism. Use purple accent strokes and edge glow. Keep it abstract and subtle; it is never an app UI.",
   "Surfaces: subtle glassmorphism panels, thin divider/separator lines, generous intentional whitespace, sharp typography hierarchy.",
   "Typography: gigantic bold headline in a clean modern grotesk sans-serif with tight line spacing; thin uppercase micro-labels with wide letter spacing; smaller muted supporting copy.",
@@ -281,6 +280,8 @@ const opsUiPremiumPosterDirection = [
   "- Footer, bottom aligned: \"— Heinricht, OpsUI\" on one line and \"opsui.co.nz\" beneath it.",
 ].join("\n");
 
+type LogoCorner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
+
 type ImageStyleConfig = {
   // gpt-image / Responses image_generation size.
   size: "1024x1024" | "1024x1536";
@@ -288,6 +289,8 @@ type ImageStyleConfig = {
   dalleSize: "1024x1024" | "1024x1792";
   // Whether to attach the OpsUI app screenshots as reference images.
   includeUiReferences: boolean;
+  // Corner where the real OP logo is composited after generation.
+  logoCorner: LogoCorner;
 };
 
 const imageStyleConfig: Record<AiPostImageStyle, ImageStyleConfig> = {
@@ -295,15 +298,23 @@ const imageStyleConfig: Record<AiPostImageStyle, ImageStyleConfig> = {
     size: "1024x1536",
     dalleSize: "1024x1792",
     includeUiReferences: true,
+    logoCorner: "bottom-left",
   },
   premium: {
     size: "1024x1024",
     dalleSize: "1024x1024",
     includeUiReferences: false,
+    logoCorner: "top-left",
   },
 };
 
+const cornerLabel = (corner: LogoCorner) => corner.replace("-", " ");
+
 const buildStyleArtDirection = (style: AiPostImageStyle) => {
+  const logoReserveDirection = buildLogoReserveDirection(
+    cornerLabel(imageStyleConfig[style].logoCorner),
+  );
+
   if (style === "premium") {
     return [
       "Style: PREMIUM ENTERPRISE POSTER.",
@@ -312,7 +323,7 @@ const buildStyleArtDirection = (style: AiPostImageStyle) => {
       "No app UI for this style: do not include any OpsUI app screenshots, dashboards, tables, charts, or product UI. Use abstract operational geometry instead. No app screenshots are attached for this style.",
       "",
       "Logo direction:",
-      opsUiLogoDirection,
+      logoReserveDirection,
     ];
   }
 
@@ -324,7 +335,7 @@ const buildStyleArtDirection = (style: AiPostImageStyle) => {
     opsUiUiReferenceDirection,
     "",
     "Logo direction:",
-    opsUiLogoDirection,
+    logoReserveDirection,
   ];
 };
 
@@ -626,30 +637,11 @@ const buildResponsesImageInput = (
     | { type: "input_image"; image_url: string; detail: "high" }
   > = [{ type: "input_text", text: prompt }];
 
-  // Each reference is labelled by index + role and locked to verbatim
-  // reproduction. The logo is attached first because, when multiple reference
-  // images are supplied, the first one is preserved with the finest detail.
+  // The OP logo is NOT attached to the model — it is composited onto the output
+  // afterwards so it is always pixel perfect. The only references sent are the
+  // OpsUI app screenshots, each labelled by index and locked to verbatim
+  // reproduction.
   let referenceIndex = 0;
-
-  if (opsUiLogoReferenceDataUrl) {
-    referenceIndex += 1;
-    userContent.push({
-      type: "input_text",
-      text: [
-        `Image ${referenceIndex} = OP logo (flat square purple background, bold white uppercase OP).`,
-        "FIXED REFERENCE ASSET — copy and paste it in verbatim, pixel-for-pixel; it is final and immutable.",
-        "Preserve exactly its shape, proportions, colours/hex, letterforms, and aspect ratio.",
-        "Do not recolour, restyle, redraw, re-render, re-typeset, simplify, crop, rotate, distort, or add gradients, shadows, or glows. Never use the old glowing black OP icon.",
-        "If it cannot be reproduced faithfully, omit it rather than alter it.",
-      ].join(" "),
-    });
-    userContent.push({
-      type: "input_image",
-      image_url: opsUiLogoReferenceDataUrl,
-      detail: "high",
-    });
-  }
-
   let attachedScreenshotCount = 0;
 
   if (includeUiReferences) {
@@ -689,7 +681,7 @@ const buildResponsesImageInput = (
             "",
             "REFERENCE-LOCK RULES (highest priority; these override all style, creativity, and art-direction instructions).",
             "Treat every attached reference image as a FIXED, FINISHED ASSET to be copied and pasted in, not a subject to be generated, imagined, redrawn, or improved.",
-            "Each attached reference image is labelled by index and role in the user message (the OP logo, and OpsUI app screenshots). Follow those labels exactly and refer to assets only by them.",
+            "Each attached reference image is an OpsUI app screenshot, labelled by index in the user message. Follow those labels exactly and refer to assets only by them.",
             "For EVERY reference image:",
             "- Reproduce it exactly, pixel-for-pixel, as supplied. It is final and immutable.",
             "- Preserve exactly its shape, proportions, colours and exact hex, typography, glyph spacing, internal layout, crop, and aspect ratio.",
@@ -698,7 +690,7 @@ const buildResponsesImageInput = (
             "- Do not crop, rotate, skew, mirror, stretch, distort, reflow, or add or remove any element inside it.",
             "- Do not invent text, data, labels, rows, charts, controls, or UI that is not present in the supplied asset.",
             "- Place it large, flat, and upright so no detail has to be re-synthesised.",
-            "Use the attached OP logo (Image 1) for any logo, brand mark, app icon, watermark, or corner bug. It is a flat square purple background with bold white uppercase OP; no gradient, no glow, never the old glowing black OP icon.",
+            "Do not draw, render, or recreate any OpsUI logo, OP mark, wordmark, app icon, watermark, or brand bug anywhere; leave the designated corner margin clean and unobstructed. The official logo is composited onto the image afterwards, so any logo you draw would be a duplicate and must be omitted.",
             uiReferenceInstruction,
             "Restate and obey these invariants on every regeneration; do not let the references drift.",
             "FAIL-SAFE: if any reference cannot be reproduced faithfully at the required size and fidelity, omit it entirely rather than output an altered, approximate, or invented version. A missing logo or UI is acceptable; a wrong one is not.",
@@ -714,16 +706,52 @@ const buildResponsesImageInput = (
   ];
 };
 
-const getLogoReferenceUpload = async () => {
+// Composite the real OP logo PNG onto the generated image so the brand mark is
+// always pixel perfect (the model is instructed not to draw one). Returns the
+// composited image as base64 JPEG, or null if compositing is not possible — the
+// caller then falls back to the original generated image.
+const compositeBrandLogo = async (
+  imageBase64: string,
+  corner: LogoCorner,
+): Promise<
+  { imageData: string; mimeType: string; fileExtension: string } | null
+> => {
   if (!fs.existsSync(opsUiLogoReferencePath)) {
     return null;
   }
 
-  return toFile(
-    fs.createReadStream(opsUiLogoReferencePath),
-    "opsui-logo-reference.png",
-    { type: "image/png" },
-  );
+  try {
+    const inputBuffer = Buffer.from(imageBase64, "base64");
+    const { width, height } = await sharp(inputBuffer).metadata();
+
+    if (!width || !height) {
+      return null;
+    }
+
+    const logoSize = Math.round(width * 0.14);
+    const padding = Math.round(width * 0.045);
+    const logoBuffer = await sharp(opsUiLogoReferencePath)
+      .resize(logoSize, logoSize, {
+        fit: "contain",
+        background: { r: 0, g: 0, b: 0, alpha: 0 },
+      })
+      .png()
+      .toBuffer();
+    const top = corner.startsWith("top") ? padding : height - logoSize - padding;
+    const left = corner.endsWith("left") ? padding : width - logoSize - padding;
+    const composited = await sharp(inputBuffer)
+      .composite([{ input: logoBuffer, top, left }])
+      .jpeg({ quality: 92 })
+      .toBuffer();
+
+    return {
+      imageData: composited.toString("base64"),
+      mimeType: "image/jpeg",
+      fileExtension: "jpg",
+    };
+  } catch {
+    return null;
+  }
 };
 
 const generatePostImageViaResponses = async (
@@ -800,29 +828,14 @@ const generatePostImageWithFallback = async (
           style: "vivid",
         });
       } else {
-        const logoReferenceUpload = await getLogoReferenceUpload();
-
-        response = logoReferenceUpload
-          ? await openai?.images.edit({
-              model,
-              image: logoReferenceUpload,
-              prompt,
-              n: 1,
-              size: styleConfig.size,
-              quality: "high",
-              output_format: "jpeg",
-              ...(supportsInputFidelity(model)
-                ? { input_fidelity: "high" as const }
-                : {}),
-            })
-          : await openai?.images.generate({
-              model,
-              prompt,
-              n: 1,
-              size: styleConfig.size,
-              quality: "high",
-              output_format: "jpeg",
-            });
+        response = await openai?.images.generate({
+          model,
+          prompt,
+          n: 1,
+          size: styleConfig.size,
+          quality: "high",
+          output_format: "jpeg",
+        });
       }
       const imageData = await getGeneratedImageData(response);
 
@@ -962,8 +975,16 @@ export const registerAiRoutes = (app: import("fastify").FastifyInstance) => {
           message: `OpenAI image generation failed: ${message}`,
         });
       }
+      // Paste the real OP logo onto the result so the brand mark is pixel
+      // perfect; fall back to the raw generation if compositing is unavailable.
+      const brandedImage =
+        (await compositeBrandLogo(
+          generatedImage.imageData,
+          styleConfig.logoCorner,
+        )) ?? generatedImage;
+
       const generatedAt = new Date().toISOString();
-      const fileName = `opsui-post-${Date.now()}.${generatedImage.fileExtension}`;
+      const fileName = `opsui-post-${Date.now()}.${brandedImage.fileExtension}`;
 
       await storage.insertAiPostImageGeneration({
         id: nanoid(),
@@ -978,7 +999,7 @@ export const registerAiRoutes = (app: import("fastify").FastifyInstance) => {
       });
 
       return aiPostImageSchema.parse({
-        imageDataUrl: `data:${generatedImage.mimeType};base64,${generatedImage.imageData}`,
+        imageDataUrl: `data:${brandedImage.mimeType};base64,${brandedImage.imageData}`,
         fileName,
         conversationId,
         tags,
