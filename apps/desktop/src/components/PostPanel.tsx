@@ -867,11 +867,13 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
       );
       setSaveNotice(`${account.displayName} disconnected.`);
     } catch (error) {
-      setSaveNotice(
+      const reason =
         error instanceof ApiError
           ? error.message
-          : `Unable to disconnect ${account.displayName}.`,
-      );
+          : error instanceof Error
+            ? error.message
+            : "unknown error";
+      setSaveNotice(`Couldn't disconnect ${account.displayName}: ${reason}`);
     }
   };
 

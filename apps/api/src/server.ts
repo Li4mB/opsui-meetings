@@ -31,6 +31,10 @@ const buildServer = async () => {
   await app.register(cors, {
     origin: true,
     credentials: true,
+    // @fastify/cors defaults methods to "GET,HEAD,POST", which blocks the
+    // cross-origin DELETE used to disconnect social accounts. Allow the full
+    // set so DELETE (and any future PUT/PATCH) preflights succeed.
+    methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
   });
 
   await app.register(sensible);
