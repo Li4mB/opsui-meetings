@@ -551,6 +551,18 @@ label {
   color: #08111d;
 }
 
+.header-action-button--warn {
+  border-color: rgba(255, 138, 138, 0.5);
+  color: #ffd4d4;
+  background: rgba(255, 99, 99, 0.12);
+}
+
+.header-action-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+  transform: none;
+}
+
 .header-user {
   display: flex;
   align-items: center;

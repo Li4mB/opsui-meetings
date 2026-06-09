@@ -78,6 +78,9 @@ import {
 import { ensureNotificationPermission, notifyNewMeetings } from "./lib/notify";
 
 type BootState = "loading" | "ready" | "error";
+type UpdateCheckStatus =
+  | { phase: "idle" | "checking" | "current" }
+  | { phase: "error"; message: string };
 const STARTUP_TIMEOUT_MS = 3000;
 const UPDATE_POLL_INTERVAL_MS = 2 * 60 * 1000;
 // Background auto-sync cadence for meeting data (mirrors the updater poll).
@@ -134,6 +137,11 @@ const App = () => {
   const [approvedUsers, setApprovedUsers] = useState<AuthBootstrapUser[]>([]);
   const [updateState, setUpdateState] = useState<UpdateState>(
     updaterEnabled ? { status: "checking" } : { status: "ready" },
+  );
+  // Non-blocking record of the last check so the header can show "up to date",
+  // "checking", or a retryable failure instead of failing silently.
+  const [updateCheckStatus, setUpdateCheckStatus] = useState<UpdateCheckStatus>(
+    updaterEnabled ? { phase: "checking" } : { phase: "idle" },
   );
   const updateCheckInFlight = useRef(false);
   const deferredQuery = useDeferredValue(filters.query.trim().toLowerCase());
@@ -792,7 +800,70 @@ const App = () => {
       });
     }
   };
-  const handleInstallUpdateEvent = useEffectEvent(handleInstallUpdate);
+  const runUpdateCheck = async (showCheckingScreen = false) => {
+    if (!updaterEnabled) {
+      setUpdateState({ status: "ready" });
+      return;
+    }
+
+    // Never interrupt an update that is already downloading/installing or a
+    // surfaced install error the user is acting on.
+    if (
+      updateState.status === "required" ||
+      updateState.status === "installing" ||
+      updateState.status === "error"
+    ) {
+      return;
+    }
+
+    if (updateCheckInFlight.current) {
+      return;
+    }
+
+    updateCheckInFlight.current = true;
+
+    if (showCheckingScreen && updateState.status !== "ready") {
+      setUpdateState({ status: "checking" });
+    }
+    setUpdateCheckStatus({ phase: "checking" });
+
+    const result = await checkForAppUpdate();
+    updateCheckInFlight.current = false;
+
+    if (result.kind === "update") {
+      setUpdateCheckStatus({ phase: "current" });
+      setUpdateState({
+        status: "required",
+        update: result.update,
+        progress: 0,
+        message: "Update found. Installing automatically...",
+      });
+      void handleInstallUpdate(result.update);
+      return;
+    }
+
+    if (result.kind === "error") {
+      // A failed check must not lock the user out — proceed into the app, but
+      // surface the failure so it can be retried instead of looking "up to date".
+      setUpdateCheckStatus({ phase: "error", message: result.message });
+      setUpdateState((current) =>
+        current.status === "checking" ? { status: "ready" } : current,
+      );
+      return;
+    }
+
+    // "current" (confirmed latest) or "unsupported" (web build): unblock the app.
+    setUpdateCheckStatus({ phase: "current" });
+    setUpdateState((current) =>
+      current.status === "checking" ? { status: "ready" } : current,
+    );
+  };
+  // Keep the timer/focus/online handlers pointed at the latest closure (fresh
+  // updateState) without resubscribing the listeners on every state change.
+  const runUpdateCheckRef = useRef(runUpdateCheck);
+  useEffect(() => {
+    runUpdateCheckRef.current = runUpdateCheck;
+  });
 
   useEffect(() => {
     if (!updaterEnabled) {
@@ -800,59 +871,27 @@ const App = () => {
       return;
     }
 
-    let active = true;
-
-    const checkAndInstallUpdate = async (showCheckingScreen = false) => {
-      if (updateCheckInFlight.current) {
-        return;
-      }
-
-      updateCheckInFlight.current = true;
-
-      if (showCheckingScreen) {
-        setUpdateState({ status: "checking" });
-      }
-
-      const update = await checkForAppUpdate();
-      updateCheckInFlight.current = false;
-
-      if (!active) {
-        return;
-      }
-
-      if (!update) {
-        if (showCheckingScreen) {
-          setUpdateState({ status: "ready" });
-        }
-        return;
-      }
-
-      setUpdateState({
-        status: "required",
-        update,
-        progress: 0,
-        message: "Update found. Installing automatically...",
-      });
-
-      void handleInstallUpdateEvent(update);
-    };
-
-    void checkAndInstallUpdate(true);
+    void runUpdateCheckRef.current(true);
 
     const updateInterval = window.setInterval(() => {
-      void checkAndInstallUpdate();
+      void runUpdateCheckRef.current(false);
     }, UPDATE_POLL_INTERVAL_MS);
 
     const handleWindowFocus = () => {
-      void checkAndInstallUpdate();
+      void runUpdateCheckRef.current(false);
+    };
+    const handleOnline = () => {
+      // Network regained — retry immediately rather than waiting for the poll.
+      void runUpdateCheckRef.current(false);
     };
 
     window.addEventListener("focus", handleWindowFocus);
+    window.addEventListener("online", handleOnline);
 
     return () => {
-      active = false;
       window.clearInterval(updateInterval);
       window.removeEventListener("focus", handleWindowFocus);
+      window.removeEventListener("online", handleOnline);
     };
   }, [updaterEnabled]);
 
@@ -985,6 +1024,12 @@ const App = () => {
       onStartCurrentMeeting={handleStartCurrentMeeting}
       onSetViewMode={setViewMode}
       onSync={() => refreshWorkspace(session, { syncFirst: true })}
+      onCheckForUpdates={() => void runUpdateCheck(true)}
+      updaterSupported={updaterEnabled}
+      updateCheckPhase={updateCheckStatus.phase}
+      updateCheckError={
+        updateCheckStatus.phase === "error" ? updateCheckStatus.message : null
+      }
       onUnlockLoft={handleUnlockLoft}
       onUpdateUser={handleUpdateUser}
       selectedMeeting={selectedMeeting}

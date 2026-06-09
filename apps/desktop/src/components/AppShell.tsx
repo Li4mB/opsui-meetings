@@ -58,6 +58,10 @@ type Props = {
   onSelectMeeting: (meetingId: string) => void;
   onCloseMeeting: () => void;
   onSync: () => Promise<void>;
+  onCheckForUpdates: () => void;
+  updaterSupported: boolean;
+  updateCheckPhase: "idle" | "checking" | "current" | "error";
+  updateCheckError: string | null;
   onLogout: () => Promise<void>;
   onAssign: (meetingId: string, assignedUserId: string | null) => Promise<void>;
   onResolveMeeting: (meetingId: string) => Promise<void>;
@@ -118,6 +122,10 @@ export const AppShell = ({
   onSelectMeeting,
   onCloseMeeting,
   onSync,
+  onCheckForUpdates,
+  updaterSupported,
+  updateCheckPhase,
+  updateCheckError,
   onLogout,
   onAssign,
   onResolveMeeting,
@@ -336,6 +344,30 @@ export const AppShell = ({
             >
               {syncStatus === "syncing" ? "Syncing..." : "Sync"}
             </button>
+            {updaterSupported ? (
+              <button
+                className={`header-action-button${
+                  updateCheckPhase === "error"
+                    ? " header-action-button--warn"
+                    : ""
+                }`}
+                onClick={() => onCheckForUpdates()}
+                type="button"
+                disabled={updateCheckPhase === "checking"}
+                title={
+                  updateCheckError ??
+                  (updateCheckPhase === "current"
+                    ? "You're on the latest release."
+                    : "Check the release channel for a new version.")
+                }
+              >
+                {updateCheckPhase === "checking"
+                  ? "Checking..."
+                  : updateCheckPhase === "error"
+                    ? "Update check failed - retry"
+                    : "Check for updates"}
+              </button>
+            ) : null}
             <button
               className="header-action-button"
               onClick={() => void onLogout()}
