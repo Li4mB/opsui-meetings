@@ -1,8 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DragEvent, PointerEvent } from "react";
 import type {
+  AiChatMessage,
   AiPostContent,
+  AiPostHistoryItem,
   AiPostImageStyle,
+  AiPostPlan,
+  AutoPostAgentConfig,
   SocialAccount,
   ScheduledSocialPlatform,
   ScheduledSocialPost,
@@ -15,11 +19,17 @@ import {
   deleteScheduledSocialPost,
   generatePostContent,
   generatePostImage,
+  getAutoPostAgentConfig,
+  getPostHistory,
   getScheduledSocialPosts,
   getSocialAccounts,
+  planNextPost,
   publishSocialPosts,
   rescheduleSocialPost,
+  reviewSocialPost,
   scheduleSocialPosts,
+  sendStrategyChat,
+  updateAutoPostAgentConfig,
 } from "../lib/api";
 
 type SocialPlatform = ScheduledSocialPlatform;
@@ -471,7 +481,7 @@ const getLocalDateKey = (date: Date) =>
   `${date.getFullYear()}-${padDatePart(date.getMonth() + 1)}-${padDatePart(date.getDate())}`;
 
 const canEditScheduledPost = (post: ScheduledSocialPost) =>
-  ["scheduled", "failed", "connection_required"].includes(post.status);
+  ["scheduled", "failed", "connection_required", "pending_review"].includes(post.status);
 
 const mergeDateWithPostTime = (date: Date, post: ScheduledSocialPost) => {
   const current = new Date(post.scheduledFor);
@@ -565,6 +575,19 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
   const [draggedScheduledPostId, setDraggedScheduledPostId] = useState<string | null>(null);
   const [scheduledDragPoint, setScheduledDragPoint] = useState<{ x: number; y: number } | null>(null);
   const [updatingScheduledPostIds, setUpdatingScheduledPostIds] = useState<string[]>([]);
+  // History / planner / assistant / auto-post agent
+  const [isHistoryOpen, setIsHistoryOpen] = useState(false);
+  const [historyItems, setHistoryItems] = useState<AiPostHistoryItem[]>([]);
+  const [isHistoryLoading, setIsHistoryLoading] = useState(false);
+  const [isPlanning, setIsPlanning] = useState(false);
+  const [planRationale, setPlanRationale] = useState<AiPostPlan | null>(null);
+  const [isChatOpen, setIsChatOpen] = useState(false);
+  const [chatMessages, setChatMessages] = useState<AiChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const [isChatSending, setIsChatSending] = useState(false);
+  const [agentConfig, setAgentConfig] = useState<AutoPostAgentConfig | null>(null);
+  const [isAgentExpanded, setIsAgentExpanded] = useState(false);
+  const [isSavingAgent, setIsSavingAgent] = useState(false);
   const masterCaptionInputRef = useRef<HTMLTextAreaElement | null>(null);
   const postImageRef = useRef<PostImage | null>(null);
   const userTimezone = useMemo(getUserTimezone, []);
@@ -631,6 +654,10 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
   const selectedAll =
     connectedAccounts.length > 0 &&
     selectedAccountIds.length === connectedAccounts.length;
+  const pendingReviewPosts = useMemo(
+    () => scheduledPosts.filter((post) => post.status === "pending_review"),
+    [scheduledPosts],
+  );
   const queueMonthLabel = useMemo(
     () =>
       new Intl.DateTimeFormat(undefined, {
@@ -679,6 +706,24 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
     return () => {
       cancelled = true;
       window.clearInterval(interval);
+    };
+  }, [authToken]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    getAutoPostAgentConfig(authToken)
+      .then((response) => {
+        if (!cancelled) {
+          setAgentConfig(response.config);
+        }
+      })
+      .catch(() => {
+        /* agent config is optional; ignore load errors */
+      });
+
+    return () => {
+      cancelled = true;
     };
   }, [authToken]);
 
@@ -920,6 +965,206 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
   const handleSelectImageStyle = (style: AiPostImageStyle) => {
     setImageStyle(style);
     window.localStorage.setItem(imageStyleStorageKey, style);
+  };
+
+  // Map a planner result onto the composer. Shared by the "Plan" button and the
+  // assistant's "draft this as a post" handoff. The image still routes through
+  // the hardlocked generatePostImage path — the plan only sets prompt + style.
+  const applyPlan = (plan: AiPostPlan) => {
+    applyCaptionStrategy(
+      {
+        caption: plan.caption,
+        alternatives: plan.alternatives,
+        hashtagBank: plan.hashtagBank,
+        postingStyleRecommendation: plan.rationale,
+        ctaOptions: plan.ctaOptions,
+        generatedAt: plan.generatedAt,
+        model: plan.model,
+      },
+      "Planner prefilled the composer — review and generate the image.",
+    );
+    setCaptionPrompt(plan.angle);
+    setImagePrompt(plan.imagePrompt);
+    handleSelectImageStyle(plan.imageStyle);
+
+    const ids = plan.recommendedAccounts
+      .map((target) => target.accountId)
+      .filter((id) => accountById[id]?.connected);
+    setSelectedAccountIds(ids);
+    plan.recommendedAccounts.forEach((target) => {
+      if (target.captionTweak && accountById[target.accountId]?.connected) {
+        updateDraft(target.accountId, {
+          caption: target.captionTweak,
+          customized: true,
+        });
+      }
+    });
+
+    if (plan.suggestedPostTime.isoTime) {
+      const when = new Date(plan.suggestedPostTime.isoTime);
+      if (!Number.isNaN(when.getTime()) && when.getTime() > Date.now()) {
+        setScheduleAt(formatDateTimeLocalValue(when));
+      }
+    }
+
+    setPlanRationale(plan);
+  };
+
+  const handlePlanNextPost = async () => {
+    if (!connectedAccounts.length) {
+      setSaveNotice("Connect an account before planning a post.");
+      return;
+    }
+
+    setIsPlanning(true);
+
+    try {
+      const plan = await planNextPost(authToken, {
+        targetAccountIds: selectedAccountIds,
+        timezone: userTimezone,
+        nowIso: new Date().toISOString(),
+      });
+      applyPlan(plan);
+    } catch (error) {
+      setSaveNotice(
+        error instanceof ApiError
+          ? `Planner failed: ${error.message}`
+          : "Planner unavailable.",
+      );
+    } finally {
+      setIsPlanning(false);
+    }
+  };
+
+  const handleOpenHistory = async () => {
+    setIsHistoryOpen(true);
+    setIsHistoryLoading(true);
+
+    try {
+      const response = await getPostHistory(authToken);
+      setHistoryItems(response.items);
+    } catch {
+      setHistoryItems([]);
+    } finally {
+      setIsHistoryLoading(false);
+    }
+  };
+
+  const handleSendChat = async () => {
+    const text = chatInput.trim();
+
+    if (!text || isChatSending) {
+      return;
+    }
+
+    const nextMessages: AiChatMessage[] = [
+      ...chatMessages,
+      { role: "user", content: text },
+    ];
+    setChatMessages(nextMessages);
+    setChatInput("");
+    setIsChatSending(true);
+
+    try {
+      const response = await sendStrategyChat(authToken, {
+        messages: nextMessages,
+      });
+      setChatMessages((current) => [
+        ...current,
+        { role: "assistant", content: response.reply },
+      ]);
+
+      if (response.handoff.action === "draft_post") {
+        const plan = await planNextPost(authToken, {
+          targetAccountIds: selectedAccountIds,
+          guidance: response.handoff.seedGuidance ?? undefined,
+          timezone: userTimezone,
+          nowIso: new Date().toISOString(),
+        });
+        applyPlan(plan);
+        setIsChatOpen(false);
+        setSaveNotice("Assistant drafted a post into the composer.");
+      }
+    } catch (error) {
+      setChatMessages((current) => [
+        ...current,
+        {
+          role: "assistant",
+          content:
+            error instanceof ApiError
+              ? `(error) ${error.message}`
+              : "(error) Assistant unavailable.",
+        },
+      ]);
+    } finally {
+      setIsChatSending(false);
+    }
+  };
+
+  const saveAgentConfig = async (next: AutoPostAgentConfig) => {
+    setAgentConfig(next);
+    setIsSavingAgent(true);
+
+    try {
+      const response = await updateAutoPostAgentConfig(authToken, {
+        enabled: next.enabled,
+        cadence: next.cadence,
+        postsPerRun: next.postsPerRun,
+        targetAccountIds: next.targetAccountIds,
+        imageStyle: next.imageStyle,
+        timezone: next.timezone,
+      });
+      setAgentConfig(response.config);
+    } catch (error) {
+      setSaveNotice(
+        error instanceof ApiError
+          ? `Agent save failed: ${error.message}`
+          : "Could not save agent settings.",
+      );
+      try {
+        const reverted = await getAutoPostAgentConfig(authToken);
+        setAgentConfig(reverted.config);
+      } catch {
+        /* keep optimistic value if reload also fails */
+      }
+    } finally {
+      setIsSavingAgent(false);
+    }
+  };
+
+  const handleReviewPost = async (
+    post: ScheduledSocialPost,
+    action: "approve" | "reject",
+    publishNow = false,
+  ) => {
+    setScheduledPostUpdating(post.id, true);
+
+    try {
+      const response = await reviewSocialPost(authToken, post.id, {
+        action,
+        ...(action === "approve"
+          ? {
+              publishNow,
+              scheduledFor: post.scheduledFor,
+              timezone: post.timezone,
+            }
+          : {}),
+      });
+      setScheduledPosts(response.posts);
+      setSaveNotice(
+        action === "reject"
+          ? "Draft rejected."
+          : publishNow
+            ? "Draft published."
+            : "Draft approved and scheduled.",
+      );
+    } catch (error) {
+      setSaveNotice(
+        error instanceof ApiError ? `Review failed: ${error.message}` : "Review failed.",
+      );
+    } finally {
+      setScheduledPostUpdating(post.id, false);
+    }
   };
 
   const handleGenerateImage = async () => {
@@ -1407,15 +1652,67 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
               your connected LinkedIn and X/Twitter accounts.
             </p>
           </div>
-          <div className="post-hero__pill">
-            {isSocialAccountsLoading
-              ? "Checking accounts"
-              : `${connectedAccountCount} account${connectedAccountCount === 1 ? "" : "s"} connected`}
+          <div className="post-hero__side">
+            <div className="post-hero__tools">
+              <button
+                className="post-tool-btn"
+                disabled={isPlanning || !connectedAccounts.length}
+                onClick={() => void handlePlanNextPost()}
+                type="button"
+              >
+                {isPlanning ? "Planning…" : "✨ Plan my next post"}
+              </button>
+              <button
+                className="post-tool-btn"
+                onClick={() => setIsChatOpen(true)}
+                type="button"
+              >
+                💬 Assistant
+              </button>
+              <button
+                className="post-tool-btn"
+                onClick={() => void handleOpenHistory()}
+                type="button"
+              >
+                🕑 History
+                {pendingReviewPosts.length ? (
+                  <span className="post-tool-btn__badge">{pendingReviewPosts.length}</span>
+                ) : null}
+              </button>
+            </div>
+            <div className="post-hero__pill">
+              {isSocialAccountsLoading
+                ? "Checking accounts"
+                : `${connectedAccountCount} account${connectedAccountCount === 1 ? "" : "s"} connected`}
+            </div>
           </div>
         </div>
 
         <div className="post-layout">
           <div className="post-compose">
+            {planRationale ? (
+              <div className="post-plan-rationale">
+                <div className="post-plan-rationale__head">
+                  <span className="eyebrow">Planner strategy</span>
+                  <button
+                    className="post-plan-rationale__dismiss"
+                    onClick={() => setPlanRationale(null)}
+                    type="button"
+                    aria-label="Dismiss planner strategy"
+                  >
+                    x
+                  </button>
+                </div>
+                <strong>{planRationale.angle}</strong>
+                <p>{planRationale.rationale}</p>
+                <div className="post-plan-rationale__meta">
+                  <span>Pillar: {planRationale.contentPillar}</span>
+                  <span>Framework: {planRationale.framework}</span>
+                  <span>Mix: {planRationale.valueVsPromo}</span>
+                  <span>Suggested: {planRationale.suggestedPostTime.slotLabel}</span>
+                </div>
+              </div>
+            ) : null}
             <section className="post-section">
               <div className="post-section__header">
                 <span className="eyebrow">Caption prompt</span>
@@ -1642,6 +1939,190 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
                   );
                 })}
               </div>
+
+              {canManageSocialAccounts && agentConfig
+                ? (() => {
+                    const agent = agentConfig;
+                    const schedule =
+                      agent.cadence.mode === "schedule"
+                        ? agent.cadence
+                        : { mode: "schedule" as const, times: ["09:00"], days: [1, 2, 3, 4, 5] };
+                    const patch = (partial: Partial<AutoPostAgentConfig>) =>
+                      void saveAgentConfig({ ...agent, timezone: userTimezone, ...partial });
+
+                    return (
+                      <div className="post-agent">
+                        <div className="post-agent__header">
+                          <div>
+                            <strong>Auto-post agent</strong>
+                            <small>
+                              {agent.enabled
+                                ? "On — drafting posts into your review queue"
+                                : "Off"}
+                            </small>
+                          </div>
+                          <div className="post-agent__header-actions">
+                            <button
+                              className="post-memory-btn"
+                              onClick={() => setIsAgentExpanded((value) => !value)}
+                              type="button"
+                            >
+                              {isAgentExpanded ? "Hide" : "Settings"}
+                            </button>
+                            <button
+                              aria-pressed={agent.enabled}
+                              className={`post-agent__toggle ${agent.enabled ? "post-agent__toggle--on" : ""}`}
+                              disabled={isSavingAgent}
+                              onClick={() => patch({ enabled: !agent.enabled })}
+                              type="button"
+                            >
+                              {agent.enabled ? "On" : "Off"}
+                            </button>
+                          </div>
+                        </div>
+
+                        {isAgentExpanded ? (
+                          <div className="post-agent__settings">
+                            <div className="post-agent__field">
+                              <span>Post on</span>
+                              <div className="post-platform-selector">
+                                {calendarWeekdays.map((label, day) => (
+                                  <button
+                                    className={`post-platform-btn ${schedule.days.includes(day) ? "post-platform-btn--active" : ""}`}
+                                    key={day}
+                                    onClick={() =>
+                                      patch({
+                                        cadence: {
+                                          ...schedule,
+                                          days: schedule.days.includes(day)
+                                            ? schedule.days.filter((d) => d !== day)
+                                            : [...schedule.days, day].sort((a, b) => a - b),
+                                        },
+                                      })
+                                    }
+                                    type="button"
+                                  >
+                                    {label}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+
+                            <div className="post-agent__field">
+                              <span>At</span>
+                              <div className="post-agent-time-row">
+                                {schedule.times.map((time, index) => (
+                                  <input
+                                    key={index}
+                                    onChange={(event) =>
+                                      patch({
+                                        cadence: {
+                                          ...schedule,
+                                          times: schedule.times.map((value, idx) =>
+                                            idx === index ? event.target.value : value,
+                                          ),
+                                        },
+                                      })
+                                    }
+                                    type="time"
+                                    value={time}
+                                  />
+                                ))}
+                                {schedule.times.length < 8 ? (
+                                  <button
+                                    className="post-account-add"
+                                    onClick={() =>
+                                      patch({
+                                        cadence: { ...schedule, times: [...schedule.times, "12:00"] },
+                                      })
+                                    }
+                                    type="button"
+                                  >
+                                    + time
+                                  </button>
+                                ) : null}
+                                {schedule.times.length > 1 ? (
+                                  <button
+                                    className="post-account-add"
+                                    onClick={() =>
+                                      patch({
+                                        cadence: { ...schedule, times: schedule.times.slice(0, -1) },
+                                      })
+                                    }
+                                    type="button"
+                                  >
+                                    − time
+                                  </button>
+                                ) : null}
+                              </div>
+                            </div>
+
+                            <div className="post-agent__field">
+                              <span>Posts per run</span>
+                              <div className="post-platform-selector">
+                                {[1, 2, 3, 4].map((count) => (
+                                  <button
+                                    className={`post-platform-btn ${agent.postsPerRun === count ? "post-platform-btn--active" : ""}`}
+                                    key={count}
+                                    onClick={() => patch({ postsPerRun: count })}
+                                    type="button"
+                                  >
+                                    {count}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+
+                            <div className="post-agent__field">
+                              <span>Accounts (none selected = all connected)</span>
+                              <div className="post-platform-selector">
+                                {connectedAccounts.map((account) => (
+                                  <button
+                                    className={`post-platform-btn ${agent.targetAccountIds.includes(account.id) ? "post-platform-btn--active" : ""}`}
+                                    key={account.id}
+                                    onClick={() =>
+                                      patch({
+                                        targetAccountIds: agent.targetAccountIds.includes(account.id)
+                                          ? agent.targetAccountIds.filter((id) => id !== account.id)
+                                          : [...agent.targetAccountIds, account.id],
+                                      })
+                                    }
+                                    type="button"
+                                  >
+                                    <span>{platformById[account.platform].shortLabel}</span>
+                                    {account.displayName}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+
+                            <div className="post-agent__field">
+                              <span>Image style</span>
+                              <div className="post-style-picker">
+                                {imageStyles.map((style) => (
+                                  <button
+                                    className={`post-style-btn ${agent.imageStyle === style.id ? "post-style-btn--active" : ""}`}
+                                    key={style.id}
+                                    onClick={() => patch({ imageStyle: style.id })}
+                                    type="button"
+                                  >
+                                    {style.label}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+
+                            <p className="post-account-hint">
+                              The agent plans and generates posts (with the hardlocked OpsUI
+                              references) into your review queue on this schedule. Nothing
+                              publishes until you approve it from History.
+                            </p>
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })()
+                : null}
             </section>
           </div>
 
@@ -1984,12 +2465,26 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
                               type="time"
                               value={formatTimeInputValue(new Date(event.scheduledFor))}
                             />
+                            {event.status === "pending_review" ? (
+                              <button
+                                className="post-calendar-event__approve"
+                                disabled={updatingScheduledPostIds.includes(event.id)}
+                                onClick={() => void handleReviewPost(event, "approve")}
+                                type="button"
+                              >
+                                Approve
+                              </button>
+                            ) : null}
                             <button
                               disabled={!canEditScheduledPost(event) || updatingScheduledPostIds.includes(event.id)}
-                              onClick={() => void handleRemoveScheduledPost(event)}
+                              onClick={() =>
+                                void (event.status === "pending_review"
+                                  ? handleReviewPost(event, "reject")
+                                  : handleRemoveScheduledPost(event))
+                              }
                               type="button"
                             >
-                              Remove
+                              {event.status === "pending_review" ? "Reject" : "Remove"}
                             </button>
                           </div>
                         </article>
@@ -2263,6 +2758,199 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
               time arrives, the server will send them through connected platform
               accounts.
             </p>
+          </section>
+        </div>
+      ) : null}
+
+      {isHistoryOpen ? (
+        <div className="post-drawer" role="dialog" aria-modal="true" aria-label="Post history">
+          <div
+            className="post-schedule-modal__backdrop"
+            onClick={() => setIsHistoryOpen(false)}
+          />
+          <section className="post-drawer__panel">
+            <div className="post-schedule-dialog__header">
+              <div>
+                <span className="eyebrow">History &amp; review</span>
+                <h2>The assistant uses this as context</h2>
+              </div>
+              <button
+                className="post-schedule-dialog__close"
+                onClick={() => setIsHistoryOpen(false)}
+                type="button"
+                aria-label="Close history"
+              >
+                x
+              </button>
+            </div>
+
+            {pendingReviewPosts.length ? (
+              <div className="post-history-section">
+                <span className="eyebrow">Pending review ({pendingReviewPosts.length})</span>
+                <div className="post-history-list">
+                  {pendingReviewPosts.map((post) => (
+                    <div className="post-history-item post-history-item--pending" key={post.id}>
+                      {post.thumbnailDataUrl ? (
+                        <img alt="" src={post.thumbnailDataUrl} />
+                      ) : (
+                        <span className="post-calendar-event__placeholder">
+                          {platformById[post.platform].shortLabel}
+                        </span>
+                      )}
+                      <div className="post-history-item__body">
+                        <small>
+                          {platformById[post.platform].label} ·{" "}
+                          {formatScheduledDateTime(post.scheduledFor, post.timezone)}
+                        </small>
+                        <p>{post.caption}</p>
+                        <div className="post-history-item__actions">
+                          <button
+                            disabled={updatingScheduledPostIds.includes(post.id)}
+                            onClick={() => void handleReviewPost(post, "approve")}
+                            type="button"
+                          >
+                            Approve
+                          </button>
+                          <button
+                            disabled={updatingScheduledPostIds.includes(post.id)}
+                            onClick={() => void handleReviewPost(post, "approve", true)}
+                            type="button"
+                          >
+                            Publish now
+                          </button>
+                          <button
+                            disabled={updatingScheduledPostIds.includes(post.id)}
+                            onClick={() => void handleReviewPost(post, "reject")}
+                            type="button"
+                          >
+                            Reject
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+
+            <div className="post-history-section">
+              <span className="eyebrow">Recent posts &amp; generations</span>
+              {isHistoryLoading ? (
+                <p className="post-account-hint">Loading history…</p>
+              ) : historyItems.length ? (
+                <div className="post-history-list">
+                  {historyItems.map((item) => (
+                    <div className="post-history-item" key={`${item.kind}-${item.id}`}>
+                      {item.thumbnailDataUrl ? (
+                        <img alt="" src={item.thumbnailDataUrl} />
+                      ) : (
+                        <span className="post-calendar-event__placeholder">
+                          {item.kind === "published" ? "POST" : "DRAFT"}
+                        </span>
+                      )}
+                      <div className="post-history-item__body">
+                        <small>
+                          {item.kind === "published" ? "Published" : "Caption draft"}
+                          {item.platform ? ` · ${item.platform}` : ""} ·{" "}
+                          {formatScheduledDateTime(item.createdAt, userTimezone)}
+                        </small>
+                        <p>{item.caption ?? item.prompt}</p>
+                        <div className="post-history-item__actions">
+                          <button
+                            onClick={() => {
+                              if (item.caption) {
+                                setMasterCaption(item.caption);
+                              }
+                              if (item.prompt) {
+                                setCaptionPrompt(item.prompt);
+                              }
+                              setIsHistoryOpen(false);
+                              setSaveNotice("Loaded from history.");
+                            }}
+                            type="button"
+                          >
+                            Reuse
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="post-account-hint">
+                  No history yet — publish a post or generate a caption to build context.
+                </p>
+              )}
+            </div>
+          </section>
+        </div>
+      ) : null}
+
+      {isChatOpen ? (
+        <div className="post-drawer" role="dialog" aria-modal="true" aria-label="Strategy assistant">
+          <div
+            className="post-schedule-modal__backdrop"
+            onClick={() => setIsChatOpen(false)}
+          />
+          <section className="post-drawer__panel post-chat-panel">
+            <div className="post-schedule-dialog__header">
+              <div>
+                <span className="eyebrow">Strategy assistant</span>
+                <h2>Plan &amp; refine OpsUI posts</h2>
+              </div>
+              <button
+                className="post-schedule-dialog__close"
+                onClick={() => setIsChatOpen(false)}
+                type="button"
+                aria-label="Close assistant"
+              >
+                x
+              </button>
+            </div>
+
+            <div className="post-chat-thread">
+              {chatMessages.length ? (
+                chatMessages.map((message, index) => (
+                  <div
+                    className={`post-chat-msg post-chat-msg--${message.role}`}
+                    key={index}
+                  >
+                    {message.content}
+                  </div>
+                ))
+              ) : (
+                <p className="post-account-hint">
+                  Ask for content ideas, critique a draft, or say “draft a post about…”
+                  and the assistant hands it to the planner.
+                </p>
+              )}
+              {isChatSending ? (
+                <div className="post-chat-msg post-chat-msg--assistant">Thinking…</div>
+              ) : null}
+            </div>
+
+            <div className="post-chat-composer">
+              <textarea
+                onChange={(event) => setChatInput(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    void handleSendChat();
+                  }
+                }}
+                placeholder="Message the strategy assistant…"
+                rows={3}
+                value={chatInput}
+              />
+              <button
+                className="post-generate-btn"
+                disabled={isChatSending || !chatInput.trim()}
+                onClick={() => void handleSendChat()}
+                type="button"
+              >
+                {isChatSending ? "Sending…" : "Send"}
+              </button>
+            </div>
           </section>
         </div>
       ) : null}

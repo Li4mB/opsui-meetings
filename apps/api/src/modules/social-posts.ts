@@ -1,18 +1,25 @@
 import {
+  autoPostAgentCadenceSchema,
+  autoPostAgentConfigSchema,
+  autoPostAgentConfigResponseSchema,
   connectSocialAccountInputSchema,
   publishSocialPostsInputSchema,
   publishSocialPostsResponseSchema,
   rescheduleSocialPostInputSchema,
+  reviewSocialPostInputSchema,
   socialAccountSchema,
   socialAccountsResponseSchema,
   scheduledSocialPostSchema,
   scheduledSocialPostsResponseSchema,
   scheduleSocialPostsInputSchema,
+  updateAutoPostAgentConfigInputSchema,
 } from "@opsui/shared";
+import type { AutoPostAgentConfig } from "@opsui/shared";
 import { nanoid } from "nanoid";
 import { env } from "../config/env.js";
 import { storage } from "../db/database.js";
 import type {
+  DbAutoPostAgentConfigRow,
   DbScheduledSocialPostRow,
   DbScheduledSocialPostStatus,
   DbSocialAccountRow,
@@ -40,6 +47,52 @@ const parseStoredRefreshToken = (
   } catch {
     return null;
   }
+};
+
+const defaultAutoPostAgentConfig = (): AutoPostAgentConfig => ({
+  enabled: false,
+  cadence: { mode: "schedule", times: ["09:00"], days: [1, 2, 3, 4, 5] },
+  postsPerRun: 1,
+  targetAccountIds: [],
+  imageStyle: "realistic",
+  timezone: "Pacific/Auckland",
+  lastRunAt: null,
+  updatedByUserName: null,
+  updatedAt: null,
+});
+
+const toAutoPostAgentConfig = (
+  row: DbAutoPostAgentConfigRow | null,
+): AutoPostAgentConfig => {
+  if (!row) {
+    return defaultAutoPostAgentConfig();
+  }
+
+  const cadence = autoPostAgentCadenceSchema.safeParse(
+    JSON.parse(row.cadence_json || "{}"),
+  );
+  let accountIds: string[] = [];
+
+  try {
+    const parsed = JSON.parse(row.target_account_ids_json) as unknown;
+    if (Array.isArray(parsed)) {
+      accountIds = parsed.filter((id): id is string => typeof id === "string");
+    }
+  } catch {
+    accountIds = [];
+  }
+
+  return autoPostAgentConfigSchema.parse({
+    enabled: row.enabled === 1,
+    cadence: cadence.success ? cadence.data : defaultAutoPostAgentConfig().cadence,
+    postsPerRun: row.posts_per_run,
+    targetAccountIds: accountIds,
+    imageStyle: row.image_style === "premium" ? "premium" : "realistic",
+    timezone: row.timezone,
+    lastRunAt: row.last_run_at,
+    updatedByUserName: null,
+    updatedAt: row.updated_at,
+  });
 };
 
 const toScheduledSocialPost = (row: DbScheduledSocialPostWithCreatorRow) =>
@@ -415,6 +468,123 @@ export const registerSocialPostRoutes = (
       }
 
       return scheduledPostsResponse();
+    },
+  );
+
+  // Approve or reject an auto-post agent draft (status 'pending_review').
+  app.post(
+    "/social-posts/:id/review",
+    { preHandler: [authenticateRequest] },
+    async (request, reply) => {
+      if (!request.user) {
+        return reply.unauthorized("Missing authenticated user");
+      }
+
+      const { id } = request.params as { id: string };
+      const input = reviewSocialPostInputSchema.parse(request.body);
+      const post = await storage.findScheduledSocialPostById(id);
+
+      if (!post || post.status !== "pending_review") {
+        return reply.notFound("Pending review post not found.");
+      }
+
+      if (input.action === "reject") {
+        await storage.deleteScheduledSocialPost(id);
+        return scheduledPostsResponse();
+      }
+
+      if (input.publishNow) {
+        await storage.updateScheduledSocialPostStatus(id, "publishing", {
+          statusMessage: "Publishing now.",
+        });
+        const current = await storage.findScheduledSocialPostById(id);
+
+        if (current) {
+          try {
+            const result = await publishScheduledSocialPost(current, {
+              publicBaseUrl: getRequestPublicBaseUrl(request),
+            });
+            await storage.updateScheduledSocialPostStatus(id, result.status, {
+              statusMessage: result.message,
+              externalPostId: result.externalPostId ?? null,
+              publishedAt:
+                result.status === "published" ? new Date().toISOString() : null,
+            });
+          } catch (error) {
+            await storage.updateScheduledSocialPostStatus(id, "failed", {
+              statusMessage:
+                error instanceof Error ? error.message : "Publish failed.",
+            });
+          }
+        }
+
+        return scheduledPostsResponse();
+      }
+
+      const requested = input.scheduledFor
+        ? new Date(input.scheduledFor)
+        : new Date(post.scheduled_for);
+      const scheduledFor =
+        requested.getTime() > Date.now()
+          ? requested.toISOString()
+          : new Date(Date.now() + 60_000).toISOString();
+
+      await storage.approvePendingSocialPost(
+        id,
+        scheduledFor,
+        input.timezone ?? post.timezone,
+      );
+
+      return scheduledPostsResponse();
+    },
+  );
+
+  app.get(
+    "/social-posts/agent-config",
+    { preHandler: [authenticateRequest] },
+    async () => {
+      const row = await storage.getAutoPostAgentConfig();
+
+      return autoPostAgentConfigResponseSchema.parse({
+        config: toAutoPostAgentConfig(row),
+        serverTime: new Date().toISOString(),
+      });
+    },
+  );
+
+  app.post(
+    "/social-posts/agent-config",
+    { preHandler: [authenticateRequest, requireAdmin] },
+    async (request, reply) => {
+      if (!request.user) {
+        return reply.unauthorized("Missing authenticated user");
+      }
+
+      const input = updateAutoPostAgentConfigInputSchema.parse(request.body);
+      const existing = await storage.getAutoPostAgentConfig();
+      const now = new Date().toISOString();
+
+      await storage.upsertAutoPostAgentConfig({
+        id: "default",
+        enabled: input.enabled ? 1 : 0,
+        cadence_json: JSON.stringify(input.cadence),
+        posts_per_run: input.postsPerRun,
+        target_account_ids_json: JSON.stringify(input.targetAccountIds),
+        image_style: input.imageStyle,
+        timezone: input.timezone,
+        // Keep the run clock on re-enable so we don't immediately re-fire the
+        // current slot; only clear it when disabling.
+        last_run_at: input.enabled ? existing?.last_run_at ?? null : null,
+        updated_by_user_id: request.user.id,
+        updated_at: now,
+      });
+
+      const row = await storage.getAutoPostAgentConfig();
+
+      return autoPostAgentConfigResponseSchema.parse({
+        config: toAutoPostAgentConfig(row),
+        serverTime: new Date().toISOString(),
+      });
     },
   );
 };

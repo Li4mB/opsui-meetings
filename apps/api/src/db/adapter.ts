@@ -1,7 +1,9 @@
 import type {
   CalendarMeeting,
   DbAiMeetingGuideRow,
+  DbAiPostCaptionGenerationRow,
   DbAiPostImageGenerationRow,
+  DbAutoPostAgentConfigRow,
   DbLoftBookingRow,
   DbMeetingRequestRow,
   DbMeetingRow,
@@ -80,6 +82,16 @@ export interface StorageAdapter {
     userId: string,
     limit: number,
   ): Promise<DbAiPostImageGenerationRow[]>;
+  insertAiPostCaptionGeneration(
+    row: DbAiPostCaptionGenerationRow,
+  ): Promise<void>;
+  listRecentAiPostCaptionGenerations(
+    userId: string,
+    limit: number,
+  ): Promise<DbAiPostCaptionGenerationRow[]>;
+  listPublishedSocialPosts(
+    limit: number,
+  ): Promise<DbScheduledSocialPostWithCreatorRow[]>;
   insertMeetingRequest(row: DbMeetingRequestRow): Promise<void>;
   findMeetingRequestById(id: string): Promise<DbMeetingRequestRow | null>;
   deleteMeetingRequestById(id: string): Promise<void>;
@@ -102,6 +114,11 @@ export interface StorageAdapter {
     timezone: string,
   ): Promise<DbScheduledSocialPostWithCreatorRow | null>;
   deleteScheduledSocialPost(id: string): Promise<boolean>;
+  approvePendingSocialPost(
+    id: string,
+    scheduledFor: string,
+    timezone: string,
+  ): Promise<DbScheduledSocialPostWithCreatorRow | null>;
   updateScheduledSocialPostStatus(
     id: string,
     status: DbScheduledSocialPostStatus,
@@ -128,4 +145,12 @@ export interface StorageAdapter {
     },
   ): Promise<void>;
   deleteSocialAccount(id: string): Promise<boolean>;
+  getAutoPostAgentConfig(): Promise<DbAutoPostAgentConfigRow | null>;
+  upsertAutoPostAgentConfig(row: DbAutoPostAgentConfigRow): Promise<void>;
+  // Atomically win a cadence slot: set last_run_at=nowIso only if it still
+  // equals expectedLastRunAt. Returns true if this caller claimed the run.
+  claimAutoPostAgentRun(
+    expectedLastRunAt: string | null,
+    nowIso: string,
+  ): Promise<boolean>;
 }

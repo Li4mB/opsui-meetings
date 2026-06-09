@@ -11,18 +11,34 @@ import {
   aiMeetingGuideSchema,
   aiPostContentRequestSchema,
   aiPostContentSchema,
+  aiPostHistoryResponseSchema,
   aiPostImageRequestSchema,
   aiPostImageSchema,
+  aiPlanPostRequestSchema,
+  aiPostPlanSchema,
+  aiPostPlanContentSchema,
+  aiPostChatRequestSchema,
+  aiPostChatResponseSchema,
+  aiPostChatContentSchema,
   meetingSchema,
 } from "@opsui/shared";
-import type { AiPostImageStyle } from "@opsui/shared";
+import type {
+  AiPostImage,
+  AiPostImageRequest,
+  AiPostImageStyle,
+  AiPostHistoryItem,
+  AiPostPlan,
+} from "@opsui/shared";
 import { storage } from "../db/database.js";
 import { env } from "../config/env.js";
 import { authenticateRequest } from "./auth.js";
+import { listConfiguredSocialAccounts } from "./social-publisher.js";
 import type {
   DbAiMeetingGuideRow,
+  DbAiPostCaptionGenerationRow,
   DbAiPostImageGenerationRow,
 } from "../types.js";
+import type { DbScheduledSocialPostWithCreatorRow } from "../db/adapter.js";
 import type {
   DbMeetingWithAssignmentRow,
   DbPastMeetingWithAssignmentRow,
@@ -813,6 +829,19 @@ const generatePostImageWithFallback = async (
     lastError = error;
   }
 
+  // The legacy images.* fallbacks CANNOT attach the OpsUI reference screenshots
+  // (only the Responses path does). To keep the hardlock honest, override the
+  // prompt so the fallback never tries to reproduce app UI it cannot see — it
+  // must render abstract, brand-safe visuals only. The real logo is composited
+  // afterward regardless.
+  const fallbackPrompt = [
+    prompt,
+    "",
+    "FALLBACK MODE — no reference images are attached on this path.",
+    "Do NOT render, reproduce, or invent any OpsUI app UI, dashboards, charts, tables, metrics, menus, or product screenshots. Ignore any earlier instruction to use attached screenshots.",
+    "Use only abstract operational/brand-safe visuals (warehouse/process scenes, operational geometry, clean typographic posters). The official OpsUI logo is added separately in post — do not draw a logo.",
+  ].join("\n");
+
   for (const model of imageModels) {
     try {
       let response;
@@ -820,7 +849,7 @@ const generatePostImageWithFallback = async (
       if (model === "dall-e-3") {
         response = await openai?.images.generate({
           model,
-          prompt,
+          prompt: fallbackPrompt,
           n: 1,
           size: styleConfig.dalleSize,
           quality: "hd",
@@ -830,7 +859,7 @@ const generatePostImageWithFallback = async (
       } else {
         response = await openai?.images.generate({
           model,
-          prompt,
+          prompt: fallbackPrompt,
           n: 1,
           size: styleConfig.size,
           quality: "high",
@@ -876,6 +905,294 @@ const getBoundGuideByGoogleEventId = async (googleEventId: string) => {
   });
 };
 
+// Internal helper: the hardlocked image pipeline, reused by the HTTP route AND
+// the auto-post agent. Reference attachment (buildImagePrompt /
+// buildResponsesImageInput) + logo compositing (compositeBrandLogo) are
+// unchanged — callers only pass a prompt + style.
+export const generatePostImageForRequest = async (
+  input: AiPostImageRequest,
+  userId: string,
+): Promise<AiPostImage> => {
+  if (!openai) {
+    throw new Error("OpenAI is not configured.");
+  }
+
+  const tags = normalizeTags(input.tags);
+  const conversationId =
+    input.conversationId?.trim() || `post-image-${userId}`;
+  const recentGenerations = await storage.listRecentAiPostImageGenerations(
+    conversationId,
+    userId,
+    6,
+  );
+  const appContext = await fetchOpsUiAppContext();
+  const styleConfig = imageStyleConfig[input.style];
+
+  const generatedImage = await generatePostImageWithFallback(
+    buildImagePrompt({
+      prompt: input.prompt,
+      caption: input.caption,
+      tags,
+      appContext,
+      recentGenerations,
+      style: input.style,
+    }),
+    styleConfig,
+  );
+  const brandedImage =
+    (await compositeBrandLogo(generatedImage.imageData, styleConfig.logoCorner)) ??
+    generatedImage;
+  const generatedAt = new Date().toISOString();
+  const fileName = `opsui-post-${Date.now()}.${brandedImage.fileExtension}`;
+
+  await storage.insertAiPostImageGeneration({
+    id: nanoid(),
+    conversation_id: conversationId,
+    prompt: input.prompt,
+    caption: input.caption ?? null,
+    tags_json: JSON.stringify(tags),
+    image_name: fileName,
+    image_model: generatedImage.model,
+    created_by_user_id: userId,
+    created_at: generatedAt,
+  });
+
+  return aiPostImageSchema.parse({
+    imageDataUrl: `data:${brandedImage.mimeType};base64,${brandedImage.imageData}`,
+    fileName,
+    conversationId,
+    tags,
+    generatedAt,
+    model: generatedImage.model,
+  });
+};
+
+// ---- Post history (context for the planner + chat, and the History drawer) ----
+const dedupeByCaption = <T extends { caption: string | null }>(rows: T[]): T[] => {
+  const seen = new Set<string>();
+  return rows.filter((row) => {
+    const key = (row.caption ?? "").trim().toLowerCase();
+    if (!key) {
+      return true;
+    }
+    if (seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
+};
+
+const formatPublishedHistory = (posts: DbScheduledSocialPostWithCreatorRow[]) =>
+  dedupeByCaption(posts)
+    .map(
+      (post, index) =>
+        `${index + 1}. [${(post.published_at ?? post.created_at).slice(0, 10)} · ${post.platform}] ${trimForPrompt(post.caption, 220)}`,
+    )
+    .join("\n");
+
+const formatCaptionGenHistory = (gens: DbAiPostCaptionGenerationRow[]) =>
+  gens
+    .map(
+      (gen, index) =>
+        `${index + 1}. [${gen.created_at.slice(0, 10)} · ${gen.platform}] ${trimForPrompt(gen.caption, 200)}`,
+    )
+    .join("\n");
+
+const loadPostHistory = async (userId: string) => {
+  const [published, captionGens] = await Promise.all([
+    storage.listPublishedSocialPosts(15),
+    storage.listRecentAiPostCaptionGenerations(userId, 12),
+  ]);
+  return { published, captionGens };
+};
+
+const buildHistoryContextBlock = (
+  history: Awaited<ReturnType<typeof loadPostHistory>>,
+  maxChars: number,
+) =>
+  trimForPrompt(
+    [
+      history.published.length
+        ? `Published posts (most recent first):\n${formatPublishedHistory(history.published)}`
+        : "",
+      history.captionGens.length
+        ? `Recent caption drafts:\n${formatCaptionGenHistory(history.captionGens)}`
+        : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n"),
+    maxChars,
+  );
+
+const toHistoryItems = (
+  history: Awaited<ReturnType<typeof loadPostHistory>>,
+): AiPostHistoryItem[] => [
+  ...history.published.map(
+    (post): AiPostHistoryItem => ({
+      kind: "published",
+      id: post.id,
+      createdAt: post.published_at ?? post.created_at,
+      platform: post.platform,
+      caption: post.caption,
+      prompt: null,
+      imageName: post.image_name,
+      thumbnailDataUrl: post.thumbnail_data_url,
+      model: null,
+    }),
+  ),
+  ...history.captionGens.map(
+    (gen): AiPostHistoryItem => ({
+      kind: "caption",
+      id: gen.id,
+      createdAt: gen.created_at,
+      platform: gen.platform,
+      caption: gen.caption,
+      prompt: gen.prompt,
+      imageName: null,
+      thumbnailDataUrl: null,
+      model: gen.model,
+    }),
+  ),
+];
+
+// ---- Planner: decide the next best post (button + agent share this brain) ----
+const postPlannerPrompt = [
+  "Act as OpsUI's head of social strategy and senior copywriter. Decide the single next best post for OpsUI and return it ready to publish.",
+  "Use only the fixed OpsUI social direction, the supplied post history, and the listed connected accounts. Do not invent product features, integrations, metrics, customers, or pricing. If a fact is unknown, leave it out.",
+  "",
+  "Think internally before answering:",
+  "- Read the recent history. Identify which pillars, angles, pains, and hooks are already covered, and do NOT repeat them.",
+  "- Pick one content pillar and one sharp angle that fills a gap in the recent mix.",
+  "- Hold the value-vs-promo ratio: if recent posts skewed promotional, choose value or soft-promo.",
+  "- Commit to one proven framework (hook-retention-cta, AIDA, PAS, BAB, education, social-proof, contrarian) and write to it.",
+  "- Match platform-native behaviour for the recommended accounts and a realistic AU/NZ posting-time heuristic.",
+  "",
+  "Caption rules (OpsUI house style): strong hook first; clean line breaks; skimmable; one idea; confident, practical, sharp, premium-not-flashy, human; no buzzwords, hype, or AI-sounding filler; end with a conversational CTA. hashtagBank values carry no '#'.",
+  "Image rules: output only an image PROMPT and a style (realistic or premium). Do NOT describe, attach, alter, or reason about reference images, app screenshots, the OpsUI logo, or compositing — those are handled downstream and are locked. realistic = portrait WMS/ERP campaign asset that may show real OpsUI app UI; premium = square luxury enterprise poster, abstract operational geometry, no app UI.",
+  "Targeting rules: recommend accountIds ONLY from the supplied connected accounts, echoing their exact ids. Add a per-account captionTweak only when region or platform genuinely needs it (AU vs NZ, X brevity vs LinkedIn authority); otherwise set captionTweak to null and the master caption is used.",
+  "Timing rules: suggest one concrete next slot using the supplied current time and timezone and platform-native heuristics; give a machine isoTime (or null if you cannot place it) and a human slotLabel.",
+  "",
+  "Return the structured fields only.",
+].join("\n");
+
+const buildPostPlanPrompt = (input: {
+  historyBlock: string;
+  accounts: { id: string; platform: string; displayName: string }[];
+  nowLabel: string;
+  guidance?: string;
+}) =>
+  [
+    "Decide and produce OpsUI's next best post.",
+    "",
+    "Fixed OpsUI social direction:",
+    opsUiSocialDirection,
+    "",
+    "Connected target accounts (recommend from these ids only):",
+    input.accounts
+      .map((a) => `- ${a.id} | ${a.platform} | ${a.displayName}`)
+      .join("\n"),
+    "",
+    `Current time: ${input.nowLabel}`,
+    input.guidance ? `Operator guidance (honour it): ${input.guidance}` : "",
+    "",
+    "Recent OpsUI history (avoid repeating these angles, hooks, and lines):",
+    input.historyBlock || "No history yet — establish a strong foundational post.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+const formatNowLabel = (nowIso: string | undefined, timezone: string) => {
+  const now = nowIso ? new Date(nowIso) : new Date();
+
+  try {
+    return `${new Intl.DateTimeFormat("en-NZ", {
+      timeZone: timezone,
+      dateStyle: "full",
+      timeStyle: "short",
+    }).format(now)} (${timezone})`;
+  } catch {
+    return now.toISOString();
+  }
+};
+
+export const runPlanner = async (input: {
+  userId: string;
+  targetAccountIds: string[];
+  guidance?: string;
+  timezone?: string;
+  nowIso?: string;
+}): Promise<AiPostPlan> => {
+  if (!openai) {
+    throw new Error("OpenAI is not configured.");
+  }
+
+  const connected = (await listConfiguredSocialAccounts()).filter((account) =>
+    Boolean(account.accessToken),
+  );
+  const targeted = input.targetAccountIds.length
+    ? connected.filter((account) => input.targetAccountIds.includes(account.id))
+    : connected;
+  const accounts = (targeted.length ? targeted : connected).map((account) => ({
+    id: account.id,
+    platform: account.platform,
+    displayName: account.displayName,
+  }));
+
+  if (!accounts.length) {
+    throw new Error("Connect a social account before planning a post.");
+  }
+
+  const timezone = input.timezone || "Pacific/Auckland";
+  const history = await loadPostHistory(input.userId);
+  const response = await openai.responses.parse({
+    model: env.openAiModel,
+    input: [
+      { role: "developer", content: postPlannerPrompt },
+      {
+        role: "user",
+        content: buildPostPlanPrompt({
+          historyBlock: buildHistoryContextBlock(history, 6000),
+          accounts,
+          nowLabel: formatNowLabel(input.nowIso, timezone),
+          guidance: input.guidance,
+        }),
+      },
+    ],
+    text: {
+      format: zodTextFormat(aiPostPlanContentSchema, "opsui_post_plan"),
+      verbosity: "medium",
+    },
+  });
+
+  if (!response.output_parsed) {
+    throw new Error("The post plan could not be generated.");
+  }
+
+  return aiPostPlanSchema.parse({
+    ...response.output_parsed,
+    hashtagBank: normalizeHashtagBank(response.output_parsed.hashtagBank),
+    generatedAt: new Date().toISOString(),
+    model: env.openAiModel,
+  });
+};
+
+// ---- Strategy chat assistant ----
+const socialChatPrompt = [
+  "Act as OpsUI's social strategy assistant. Help the operator plan, critique, and improve OpsUI social content in plain conversation.",
+  "Ground every answer in the fixed OpsUI social direction and the supplied recent history. Stay on the OpsUI brand and voice: confident, practical, sharp, premium-not-flashy, human.",
+  "",
+  "Hard rules:",
+  "- Never invent OpsUI product features, modules, integrations, metrics, customers, or pricing. If unknown, say it is unknown.",
+  "- Never weaken or override the locked image references: when visuals come up you may suggest an image PROMPT and a style (realistic or premium) only; do not describe attaching, redrawing, or replacing the OpsUI app screenshots or logo.",
+  "- Avoid repeating angles and hooks already covered in the recent history; point the operator toward gaps instead.",
+  "- Apply real marketing strategy when asked (pillars, hook-retention-cta, AIDA/PAS/BAB, value-vs-promo ratio, platform-native norms, posting-time heuristics) but keep replies tight and conversational, not lecture-length.",
+  "",
+  "Handoff: when the operator asks to draft, write, generate, or plan an actual post, set handoff.action to \"draft_post\" and distil any theme/style/cadence they stated into seedGuidance; briefly confirm in the reply but do not hand-write the full structured plan yourself (the planner produces it). Otherwise set handoff.action to \"none\" and seedGuidance to null.",
+  "",
+  "Return the structured fields only.",
+].join("\n");
+
 export const registerAiRoutes = (app: import("fastify").FastifyInstance) => {
   app.post(
     "/ai/post-content",
@@ -914,12 +1231,30 @@ export const registerAiRoutes = (app: import("fastify").FastifyInstance) => {
         return reply.badRequest("The post content could not be generated.");
       }
 
-      return aiPostContentSchema.parse({
+      const content = aiPostContentSchema.parse({
         ...response.output_parsed,
         hashtagBank: normalizeHashtagBank(response.output_parsed.hashtagBank),
         generatedAt: new Date().toISOString(),
         model: env.openAiCaptionModel,
       });
+
+      // Persist the chosen caption as history for the planner/assistant. Skip
+      // per-account tweaks (they revise an existing caption, not a new angle).
+      if (request.user && !input.tweakInstruction) {
+        await storage.insertAiPostCaptionGeneration({
+          id: nanoid(),
+          conversation_id: `post-content-${request.user.id}`,
+          prompt: input.prompt,
+          platform: input.platform,
+          caption: content.caption,
+          hashtags_json: JSON.stringify(content.hashtagBank),
+          model: env.openAiCaptionModel,
+          created_by_user_id: request.user.id,
+          created_at: content.generatedAt,
+        });
+      }
+
+      return content;
     },
   );
 
@@ -939,31 +1274,11 @@ export const registerAiRoutes = (app: import("fastify").FastifyInstance) => {
       }
 
       const input = aiPostImageRequestSchema.parse(request.body);
-      const tags = normalizeTags(input.tags);
-      const conversationId =
-        input.conversationId?.trim() || `post-image-${request.user.id}`;
-      const recentGenerations = await storage.listRecentAiPostImageGenerations(
-        conversationId,
-        request.user.id,
-        6,
-      );
-      const appContext = await fetchOpsUiAppContext();
-      const styleConfig = imageStyleConfig[input.style];
-
-      let generatedImage: Awaited<ReturnType<typeof generatePostImageWithFallback>>;
 
       try {
-        generatedImage = await generatePostImageWithFallback(
-          buildImagePrompt({
-            prompt: input.prompt,
-            caption: input.caption,
-            tags,
-            appContext,
-            recentGenerations,
-            style: input.style,
-          }),
-          styleConfig,
-        );
+        // The hardlocked image pipeline lives in generatePostImageForRequest,
+        // shared verbatim with the auto-post agent.
+        return await generatePostImageForRequest(input, request.user.id);
       } catch (error) {
         app.log.error({ error }, "OpenAI post image generation failed");
 
@@ -975,36 +1290,104 @@ export const registerAiRoutes = (app: import("fastify").FastifyInstance) => {
           message: `OpenAI image generation failed: ${message}`,
         });
       }
-      // Paste the real OP logo onto the result so the brand mark is pixel
-      // perfect; fall back to the raw generation if compositing is unavailable.
-      const brandedImage =
-        (await compositeBrandLogo(
-          generatedImage.imageData,
-          styleConfig.logoCorner,
-        )) ?? generatedImage;
+    },
+  );
 
-      const generatedAt = new Date().toISOString();
-      const fileName = `opsui-post-${Date.now()}.${brandedImage.fileExtension}`;
+  app.get(
+    "/ai/post-history",
+    { preHandler: [authenticateRequest] },
+    async (request, reply) => {
+      if (!request.user) {
+        return reply.unauthorized("Missing authenticated user");
+      }
 
-      await storage.insertAiPostImageGeneration({
-        id: nanoid(),
-        conversation_id: conversationId,
-        prompt: input.prompt,
-        caption: input.caption ?? null,
-        tags_json: JSON.stringify(tags),
-        image_name: fileName,
-        image_model: generatedImage.model,
-        created_by_user_id: request.user.id,
-        created_at: generatedAt,
+      const history = await loadPostHistory(request.user.id);
+
+      return aiPostHistoryResponseSchema.parse({
+        items: toHistoryItems(history),
+        serverTime: new Date().toISOString(),
+      });
+    },
+  );
+
+  app.post(
+    "/ai/plan-post",
+    { preHandler: [authenticateRequest] },
+    async (request, reply) => {
+      if (!openai) {
+        return reply.status(503).send({
+          message:
+            "OpenAI is not configured yet. Add OPENAI_API_KEY to apps/api/.env to enable the planner.",
+        });
+      }
+
+      if (!request.user) {
+        return reply.unauthorized("Missing authenticated user");
+      }
+
+      const input = aiPlanPostRequestSchema.parse(request.body);
+
+      try {
+        return await runPlanner({
+          userId: request.user.id,
+          targetAccountIds: input.targetAccountIds,
+          guidance: input.guidance,
+          timezone: input.timezone,
+          nowIso: input.nowIso,
+        });
+      } catch (error) {
+        const message = error instanceof Error
+          ? error.message
+          : "The post plan could not be generated.";
+
+        return reply.badRequest(message);
+      }
+    },
+  );
+
+  app.post(
+    "/ai/post-chat",
+    { preHandler: [authenticateRequest] },
+    async (request, reply) => {
+      if (!openai) {
+        return reply.status(503).send({
+          message:
+            "OpenAI is not configured yet. Add OPENAI_API_KEY to apps/api/.env to enable the assistant.",
+        });
+      }
+
+      if (!request.user) {
+        return reply.unauthorized("Missing authenticated user");
+      }
+
+      const input = aiPostChatRequestSchema.parse(request.body);
+      const history = await loadPostHistory(request.user.id);
+      const response = await openai.responses.parse({
+        model: env.openAiModel,
+        input: [
+          {
+            role: "developer",
+            content: `${socialChatPrompt}\n\nFixed OpsUI social direction:\n${opsUiSocialDirection}\n\nRecent OpsUI history:\n${buildHistoryContextBlock(history, 3000)}`,
+          },
+          ...input.messages.map((message) => ({
+            role: message.role,
+            content: message.content,
+          })),
+        ],
+        text: {
+          format: zodTextFormat(aiPostChatContentSchema, "opsui_social_chat"),
+          verbosity: "medium",
+        },
       });
 
-      return aiPostImageSchema.parse({
-        imageDataUrl: `data:${brandedImage.mimeType};base64,${brandedImage.imageData}`,
-        fileName,
-        conversationId,
-        tags,
-        generatedAt,
-        model: generatedImage.model,
+      if (!response.output_parsed) {
+        return reply.badRequest("The assistant could not respond.");
+      }
+
+      return aiPostChatResponseSchema.parse({
+        ...response.output_parsed,
+        generatedAt: new Date().toISOString(),
+        model: env.openAiModel,
       });
     },
   );

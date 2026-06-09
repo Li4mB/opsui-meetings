@@ -5,8 +5,16 @@ import {
   aiMeetingGuideSchema,
   aiPostContentRequestSchema,
   aiPostContentSchema,
+  aiPostHistoryResponseSchema,
   aiPostImageRequestSchema,
   aiPostImageSchema,
+  aiPlanPostRequestSchema,
+  aiPostPlanSchema,
+  aiPostChatRequestSchema,
+  aiPostChatResponseSchema,
+  autoPostAgentConfigResponseSchema,
+  reviewSocialPostInputSchema,
+  updateAutoPostAgentConfigInputSchema,
   authBootstrapSchema,
   authMeSchema,
   assignmentInputSchema,
@@ -268,6 +276,77 @@ export const generatePostImage = (
       body: JSON.stringify(aiPostImageRequestSchema.parse(input)),
     },
     aiPostImageSchema,
+  );
+
+export const getPostHistory = (token: string) =>
+  request(
+    "/ai/post-history",
+    { method: "GET", headers: withToken(token) },
+    aiPostHistoryResponseSchema,
+  );
+
+export const planNextPost = (
+  token: string,
+  input: z.infer<typeof aiPlanPostRequestSchema>,
+) =>
+  request(
+    "/ai/plan-post",
+    {
+      method: "POST",
+      headers: withToken(token),
+      body: JSON.stringify(aiPlanPostRequestSchema.parse(input)),
+    },
+    aiPostPlanSchema,
+  );
+
+export const sendStrategyChat = (
+  token: string,
+  input: z.infer<typeof aiPostChatRequestSchema>,
+) =>
+  request(
+    "/ai/post-chat",
+    {
+      method: "POST",
+      headers: withToken(token),
+      body: JSON.stringify(aiPostChatRequestSchema.parse(input)),
+    },
+    aiPostChatResponseSchema,
+  );
+
+export const getAutoPostAgentConfig = (token: string) =>
+  request(
+    "/social-posts/agent-config",
+    { method: "GET", headers: withToken(token) },
+    autoPostAgentConfigResponseSchema,
+  );
+
+export const updateAutoPostAgentConfig = (
+  token: string,
+  input: z.infer<typeof updateAutoPostAgentConfigInputSchema>,
+) =>
+  request(
+    "/social-posts/agent-config",
+    {
+      method: "POST",
+      headers: withToken(token),
+      body: JSON.stringify(updateAutoPostAgentConfigInputSchema.parse(input)),
+    },
+    autoPostAgentConfigResponseSchema,
+  );
+
+export const reviewSocialPost = (
+  token: string,
+  postId: string,
+  input: z.infer<typeof reviewSocialPostInputSchema>,
+) =>
+  request(
+    `/social-posts/${postId}/review`,
+    {
+      method: "POST",
+      headers: withToken(token),
+      body: JSON.stringify(reviewSocialPostInputSchema.parse(input)),
+    },
+    scheduledSocialPostsResponseSchema,
   );
 
 export const getScheduledSocialPosts = (token: string) =>

@@ -14,6 +14,9 @@ export const scheduledSocialPostStatusSchema = z.enum([
   "failed",
   "connection_required",
   "cancelled",
+  // The auto-post agent writes drafts in this status; nothing publishes until a
+  // human approves (the publish scheduler only ever selects "scheduled").
+  "pending_review",
 ]);
 
 const scheduleSocialPostDraftSchema = z.object({
@@ -117,6 +120,53 @@ export const connectSocialAccountInputSchema = z.object({
   scopes: z.string().trim().max(1000).nullable().optional(),
 });
 
+// ---- Auto-post agent (review-queue) ----
+export const autoPostAgentCadenceSchema = z.discriminatedUnion("mode", [
+  z.object({
+    mode: z.literal("schedule"),
+    // "HH:MM" 24h local times + ISO weekday numbers (0=Sun..6=Sat).
+    times: z.array(z.string().regex(/^\d{2}:\d{2}$/)).min(1).max(8),
+    days: z.array(z.number().int().min(0).max(6)).min(1).max(7),
+  }),
+  z.object({
+    mode: z.literal("rate"),
+    perDay: z.number().int().min(1).max(8),
+  }),
+]);
+
+export const autoPostAgentConfigSchema = z.object({
+  enabled: z.boolean(),
+  cadence: autoPostAgentCadenceSchema,
+  postsPerRun: z.number().int().min(1).max(4),
+  targetAccountIds: z.array(z.string().min(1).max(240)).max(12),
+  imageStyle: z.enum(["realistic", "premium"]),
+  timezone: z.string().min(1).max(120),
+  lastRunAt: z.string().nullable(),
+  updatedByUserName: z.string().nullable(),
+  updatedAt: z.string().nullable(),
+});
+
+export const updateAutoPostAgentConfigInputSchema = z.object({
+  enabled: z.boolean(),
+  cadence: autoPostAgentCadenceSchema,
+  postsPerRun: z.number().int().min(1).max(4),
+  targetAccountIds: z.array(z.string().min(1).max(240)).max(12),
+  imageStyle: z.enum(["realistic", "premium"]),
+  timezone: z.string().min(1).max(120),
+});
+
+export const autoPostAgentConfigResponseSchema = z.object({
+  config: autoPostAgentConfigSchema,
+  serverTime: z.string(),
+});
+
+export const reviewSocialPostInputSchema = z.object({
+  action: z.enum(["approve", "reject"]),
+  publishNow: z.boolean().optional(),
+  scheduledFor: z.string().datetime().optional(),
+  timezone: z.string().min(1).max(120).optional(),
+});
+
 export type ScheduledSocialPlatform = z.infer<typeof scheduledSocialPlatformSchema>;
 export type ScheduledSocialPostStatus = z.infer<typeof scheduledSocialPostStatusSchema>;
 export type ScheduleSocialPostsInput = z.infer<typeof scheduleSocialPostsInputSchema>;
@@ -127,3 +177,7 @@ export type PublishSocialPostsResponse = z.infer<typeof publishSocialPostsRespon
 export type SocialAccount = z.infer<typeof socialAccountSchema>;
 export type SocialAccountsResponse = z.infer<typeof socialAccountsResponseSchema>;
 export type ConnectSocialAccountInput = z.infer<typeof connectSocialAccountInputSchema>;
+export type AutoPostAgentCadence = z.infer<typeof autoPostAgentCadenceSchema>;
+export type AutoPostAgentConfig = z.infer<typeof autoPostAgentConfigSchema>;
+export type UpdateAutoPostAgentConfigInput = z.infer<typeof updateAutoPostAgentConfigInputSchema>;
+export type ReviewSocialPostInput = z.infer<typeof reviewSocialPostInputSchema>;

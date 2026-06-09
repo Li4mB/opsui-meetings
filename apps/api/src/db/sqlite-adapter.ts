@@ -7,7 +7,9 @@ import { env } from "../config/env.js";
 import type {
   CalendarMeeting,
   DbAiMeetingGuideRow,
+  DbAiPostCaptionGenerationRow,
   DbAiPostImageGenerationRow,
+  DbAutoPostAgentConfigRow,
   DbLoftBookingRow,
   DbMeetingRequestRow,
   DbMeetingRow,
@@ -122,6 +124,36 @@ const schemaSql = `
   CREATE INDEX IF NOT EXISTS idx_ai_post_image_generations_context
     ON ai_post_image_generations(conversation_id, created_by_user_id, created_at DESC);
 
+  CREATE TABLE IF NOT EXISTS ai_post_caption_generations (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    caption TEXT NOT NULL,
+    hashtags_json TEXT NOT NULL,
+    model TEXT NOT NULL,
+    created_by_user_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (created_by_user_id) REFERENCES users(id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_ai_post_caption_generations_context
+    ON ai_post_caption_generations(created_by_user_id, created_at DESC);
+
+  CREATE TABLE IF NOT EXISTS auto_post_agent_config (
+    id TEXT PRIMARY KEY,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    cadence_json TEXT NOT NULL DEFAULT '{}',
+    posts_per_run INTEGER NOT NULL DEFAULT 1,
+    target_account_ids_json TEXT NOT NULL DEFAULT '[]',
+    image_style TEXT NOT NULL DEFAULT 'realistic',
+    timezone TEXT NOT NULL DEFAULT 'Local timezone',
+    last_run_at TEXT,
+    updated_by_user_id TEXT,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (updated_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+  );
+
   CREATE TABLE IF NOT EXISTS meeting_requests (
     id TEXT PRIMARY KEY,
     client_name TEXT NOT NULL,
@@ -150,7 +182,7 @@ const schemaSql = `
     thumbnail_data_url TEXT,
     scheduled_for TEXT NOT NULL,
     timezone TEXT NOT NULL,
-    status TEXT NOT NULL CHECK(status IN ('scheduled', 'publishing', 'published', 'failed', 'connection_required', 'cancelled')),
+    status TEXT NOT NULL CHECK(status IN ('scheduled', 'publishing', 'published', 'failed', 'connection_required', 'cancelled', 'pending_review')),
     status_message TEXT,
     external_post_id TEXT,
     published_at TEXT,
@@ -345,6 +377,59 @@ export const createSqliteAdapter = (): StorageAdapter => {
     database.pragma("foreign_keys = ON");
   };
 
+  // Older databases created scheduled_social_posts with a status CHECK that
+  // omits 'pending_review'. SQLite can't alter a CHECK in place, so rebuild the
+  // table with the widened CHECK when the stored DDL lacks the new status.
+  const migrateScheduledPostsStatusCheck = (database: Database.Database) => {
+    const row = database
+      .prepare<[], { sql: string | null }>(
+        `SELECT sql FROM sqlite_master WHERE type='table' AND name='scheduled_social_posts'`,
+      )
+      .get();
+
+    if (!row?.sql || row.sql.includes("pending_review")) {
+      return;
+    }
+
+    database.pragma("foreign_keys = OFF");
+    database.exec(`
+      CREATE TABLE scheduled_social_posts_new (
+        id TEXT PRIMARY KEY,
+        platform TEXT NOT NULL CHECK(platform IN ('facebook', 'linkedin', 'twitter', 'instagram')),
+        account_id TEXT,
+        caption TEXT NOT NULL,
+        image_data_url TEXT,
+        image_name TEXT,
+        thumbnail_data_url TEXT,
+        scheduled_for TEXT NOT NULL,
+        timezone TEXT NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('scheduled', 'publishing', 'published', 'failed', 'connection_required', 'cancelled', 'pending_review')),
+        status_message TEXT,
+        external_post_id TEXT,
+        published_at TEXT,
+        created_by_user_id TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL,
+        FOREIGN KEY (created_by_user_id) REFERENCES users(id)
+      );
+      INSERT INTO scheduled_social_posts_new (
+        id, platform, account_id, caption, image_data_url, image_name,
+        thumbnail_data_url, scheduled_for, timezone, status, status_message,
+        external_post_id, published_at, created_by_user_id, created_at, updated_at
+      )
+      SELECT
+        id, platform, account_id, caption, image_data_url, image_name,
+        thumbnail_data_url, scheduled_for, timezone, status, status_message,
+        external_post_id, published_at, created_by_user_id, created_at, updated_at
+      FROM scheduled_social_posts;
+      DROP TABLE scheduled_social_posts;
+      ALTER TABLE scheduled_social_posts_new RENAME TO scheduled_social_posts;
+      CREATE INDEX IF NOT EXISTS idx_scheduled_social_posts_due
+        ON scheduled_social_posts(status, scheduled_for);
+    `);
+    database.pragma("foreign_keys = ON");
+  };
+
   return {
     async initialize() {
       if (db) {
@@ -363,6 +448,7 @@ export const createSqliteAdapter = (): StorageAdapter => {
       );
       ensureColumn(db, "scheduled_social_posts", "account_id", "account_id TEXT");
       dropSocialAccountsPlatformUnique(db);
+      migrateScheduledPostsStatusCheck(db);
     },
 
     async close() {
@@ -824,6 +910,53 @@ export const createSqliteAdapter = (): StorageAdapter => {
         .all(conversationId, userId, limit);
     },
 
+    async insertAiPostCaptionGeneration(row) {
+      const database = getDb();
+      database
+        .prepare(`
+          INSERT INTO ai_post_caption_generations (
+            id, conversation_id, prompt, platform, caption, hashtags_json,
+            model, created_by_user_id, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `)
+        .run(
+          row.id,
+          row.conversation_id,
+          row.prompt,
+          row.platform,
+          row.caption,
+          row.hashtags_json,
+          row.model,
+          row.created_by_user_id,
+          row.created_at,
+        );
+    },
+
+    async listRecentAiPostCaptionGenerations(userId, limit) {
+      const database = getDb();
+      return database
+        .prepare<unknown[], DbAiPostCaptionGenerationRow>(`
+          SELECT *
+          FROM ai_post_caption_generations
+          WHERE created_by_user_id = ?
+          ORDER BY created_at DESC
+          LIMIT ?
+        `)
+        .all(userId, limit);
+    },
+
+    async listPublishedSocialPosts(limit) {
+      const database = getDb();
+      return database
+        .prepare<unknown[], DbScheduledSocialPostWithCreatorRow>(
+          `${selectScheduledSocialPostsQuery}
+           WHERE scheduled_social_posts.status = 'published'
+           ORDER BY scheduled_social_posts.published_at DESC
+           LIMIT ?`,
+        )
+        .all(limit);
+    },
+
     async insertMeetingRequest(row) {
       const database = getDb();
       database.prepare(`
@@ -1043,10 +1176,34 @@ export const createSqliteAdapter = (): StorageAdapter => {
       const result = database.prepare(`
         DELETE FROM scheduled_social_posts
         WHERE id = ?
-          AND status IN ('scheduled', 'failed', 'connection_required', 'cancelled')
+          AND status IN ('scheduled', 'failed', 'connection_required', 'cancelled', 'pending_review')
       `).run(id);
 
       return result.changes > 0;
+    },
+
+    async approvePendingSocialPost(id, scheduledFor, timezone) {
+      const database = getDb();
+      database.prepare(`
+        UPDATE scheduled_social_posts
+        SET
+          scheduled_for = ?,
+          timezone = ?,
+          status = 'scheduled',
+          status_message = 'Approved — waiting for scheduled publish time.',
+          published_at = NULL,
+          updated_at = ?
+        WHERE id = ?
+          AND status = 'pending_review'
+      `).run(scheduledFor, timezone, new Date().toISOString(), id);
+
+      return (
+        database
+          .prepare<unknown[], DbScheduledSocialPostWithCreatorRow>(
+            `${selectScheduledSocialPostsQuery} WHERE scheduled_social_posts.id = ? LIMIT 1`,
+          )
+          .get(id) ?? null
+      );
     },
 
     async updateScheduledSocialPostStatus(id, status, patch = {}) {
@@ -1184,6 +1341,70 @@ export const createSqliteAdapter = (): StorageAdapter => {
     async deleteSocialAccount(id) {
       const database = getDb();
       const result = database.prepare("DELETE FROM social_accounts WHERE id = ?").run(id);
+      return result.changes > 0;
+    },
+
+    async getAutoPostAgentConfig() {
+      const database = getDb();
+      return (
+        database
+          .prepare<unknown[], DbAutoPostAgentConfigRow>(
+            "SELECT * FROM auto_post_agent_config WHERE id = 'default' LIMIT 1",
+          )
+          .get() ?? null
+      );
+    },
+
+    async upsertAutoPostAgentConfig(row) {
+      const database = getDb();
+      database
+        .prepare(`
+          INSERT INTO auto_post_agent_config (
+            id, enabled, cadence_json, posts_per_run, target_account_ids_json,
+            image_style, timezone, last_run_at, updated_by_user_id, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(id) DO UPDATE SET
+            enabled = excluded.enabled,
+            cadence_json = excluded.cadence_json,
+            posts_per_run = excluded.posts_per_run,
+            target_account_ids_json = excluded.target_account_ids_json,
+            image_style = excluded.image_style,
+            timezone = excluded.timezone,
+            last_run_at = excluded.last_run_at,
+            updated_by_user_id = excluded.updated_by_user_id,
+            updated_at = excluded.updated_at
+        `)
+        .run(
+          row.id,
+          row.enabled,
+          row.cadence_json,
+          row.posts_per_run,
+          row.target_account_ids_json,
+          row.image_style,
+          row.timezone,
+          row.last_run_at,
+          row.updated_by_user_id,
+          row.updated_at,
+        );
+    },
+
+    async claimAutoPostAgentRun(expectedLastRunAt, nowIso) {
+      const database = getDb();
+      const result =
+        expectedLastRunAt === null
+          ? database
+              .prepare(
+                `UPDATE auto_post_agent_config SET last_run_at = ?
+                 WHERE id = 'default' AND last_run_at IS NULL`,
+              )
+              .run(nowIso)
+          : database
+              .prepare(
+                `UPDATE auto_post_agent_config SET last_run_at = ?
+                 WHERE id = 'default' AND last_run_at = ?`,
+              )
+              .run(nowIso, expectedLastRunAt);
+
       return result.changes > 0;
     },
   };

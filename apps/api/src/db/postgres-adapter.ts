@@ -4,7 +4,9 @@ import { nanoid } from "nanoid";
 import { env } from "../config/env.js";
 import type {
   DbAiMeetingGuideRow,
+  DbAiPostCaptionGenerationRow,
   DbAiPostImageGenerationRow,
+  DbAutoPostAgentConfigRow,
   DbLoftBookingRow,
   DbMeetingRequestRow,
   DbMeetingRow,
@@ -28,6 +30,8 @@ const pastMeetingsTable = `${schemaName}.past_meetings`;
 const syncStateTable = `${schemaName}.sync_state`;
 const aiMeetingGuidesTable = `${schemaName}.ai_meeting_guides`;
 const aiPostImageGenerationsTable = `${schemaName}.ai_post_image_generations`;
+const aiPostCaptionGenerationsTable = `${schemaName}.ai_post_caption_generations`;
+const autoPostAgentConfigTable = `${schemaName}.auto_post_agent_config`;
 const meetingRequestsTable = `${schemaName}.meeting_requests`;
 const scheduledSocialPostsTable = `${schemaName}.scheduled_social_posts`;
 const socialAccountsTable = `${schemaName}.social_accounts`;
@@ -126,6 +130,34 @@ const schemaSql = `
   CREATE INDEX IF NOT EXISTS idx_ai_post_image_generations_context
     ON ${aiPostImageGenerationsTable}(conversation_id, created_by_user_id, created_at DESC);
 
+  CREATE TABLE IF NOT EXISTS ${aiPostCaptionGenerationsTable} (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    caption TEXT NOT NULL,
+    hashtags_json TEXT NOT NULL,
+    model TEXT NOT NULL,
+    created_by_user_id TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_ai_post_caption_generations_context
+    ON ${aiPostCaptionGenerationsTable}(created_by_user_id, created_at DESC);
+
+  CREATE TABLE IF NOT EXISTS ${autoPostAgentConfigTable} (
+    id TEXT PRIMARY KEY,
+    enabled SMALLINT NOT NULL DEFAULT 0,
+    cadence_json TEXT NOT NULL DEFAULT '{}',
+    posts_per_run INTEGER NOT NULL DEFAULT 1,
+    target_account_ids_json TEXT NOT NULL DEFAULT '[]',
+    image_style TEXT NOT NULL DEFAULT 'realistic',
+    timezone TEXT NOT NULL DEFAULT 'Local timezone',
+    last_run_at TEXT,
+    updated_by_user_id TEXT,
+    updated_at TEXT NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS ${meetingRequestsTable} (
     id TEXT PRIMARY KEY,
     client_name TEXT NOT NULL,
@@ -153,7 +185,7 @@ const schemaSql = `
     thumbnail_data_url TEXT,
     scheduled_for TEXT NOT NULL,
     timezone TEXT NOT NULL,
-    status TEXT NOT NULL CHECK(status IN ('scheduled', 'publishing', 'published', 'failed', 'connection_required', 'cancelled')),
+    status TEXT NOT NULL CHECK(status IN ('scheduled', 'publishing', 'published', 'failed', 'connection_required', 'cancelled', 'pending_review')),
     status_message TEXT,
     external_post_id TEXT,
     published_at TEXT,
@@ -207,6 +239,21 @@ const schemaSql = `
   -- Reference the specific account a scheduled post targets.
   ALTER TABLE ${scheduledSocialPostsTable}
     ADD COLUMN IF NOT EXISTS account_id TEXT;
+  -- Widen the status CHECK to allow the agent's 'pending_review' drafts.
+  DO $$
+  BEGIN
+    ALTER TABLE ${scheduledSocialPostsTable}
+      DROP CONSTRAINT IF EXISTS scheduled_social_posts_status_check;
+    IF NOT EXISTS (
+      SELECT 1 FROM pg_constraint
+      WHERE conname = 'scheduled_social_posts_status_check_v2'
+        AND conrelid = '${scheduledSocialPostsTable}'::regclass
+    ) THEN
+      ALTER TABLE ${scheduledSocialPostsTable}
+        ADD CONSTRAINT scheduled_social_posts_status_check_v2
+        CHECK (status IN ('scheduled', 'publishing', 'published', 'failed', 'connection_required', 'cancelled', 'pending_review'));
+    END IF;
+  END $$;
 `;
 
 const selectActiveMeetingsQuery = `
@@ -801,6 +848,51 @@ export const createPostgresAdapter = (): StorageAdapter => {
       );
     },
 
+    async insertAiPostCaptionGeneration(row) {
+      await execute(
+        `
+          INSERT INTO ${aiPostCaptionGenerationsTable} (
+            id, conversation_id, prompt, platform, caption, hashtags_json,
+            model, created_by_user_id, created_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        `,
+        [
+          row.id,
+          row.conversation_id,
+          row.prompt,
+          row.platform,
+          row.caption,
+          row.hashtags_json,
+          row.model,
+          row.created_by_user_id,
+          row.created_at,
+        ],
+      );
+    },
+
+    async listRecentAiPostCaptionGenerations(userId, limit) {
+      return queryRows<DbAiPostCaptionGenerationRow>(
+        `
+          SELECT *
+          FROM ${aiPostCaptionGenerationsTable}
+          WHERE created_by_user_id = $1
+          ORDER BY created_at DESC
+          LIMIT $2
+        `,
+        [userId, limit],
+      );
+    },
+
+    async listPublishedSocialPosts(limit) {
+      return queryRows<DbScheduledSocialPostWithCreatorRow>(
+        `${selectScheduledSocialPostsQuery}
+         WHERE scheduled_social_posts.status = 'published'
+         ORDER BY scheduled_social_posts.published_at DESC
+         LIMIT $1`,
+        [limit],
+      );
+    },
+
     async insertMeetingRequest(row) {
       await execute(
         `
@@ -1013,12 +1105,35 @@ export const createPostgresAdapter = (): StorageAdapter => {
         `
           DELETE FROM ${scheduledSocialPostsTable}
           WHERE id = $1
-            AND status IN ('scheduled', 'failed', 'connection_required', 'cancelled')
+            AND status IN ('scheduled', 'failed', 'connection_required', 'cancelled', 'pending_review')
         `,
         [id],
       );
 
       return (result.rowCount ?? 0) > 0;
+    },
+
+    async approvePendingSocialPost(id, scheduledFor, timezone) {
+      await execute(
+        `
+          UPDATE ${scheduledSocialPostsTable}
+          SET
+            scheduled_for = $1,
+            timezone = $2,
+            status = 'scheduled',
+            status_message = 'Approved — waiting for scheduled publish time.',
+            published_at = NULL,
+            updated_at = $3
+          WHERE id = $4
+            AND status = 'pending_review'
+        `,
+        [scheduledFor, timezone, new Date().toISOString(), id],
+      );
+
+      return queryRow<DbScheduledSocialPostWithCreatorRow>(
+        `${selectScheduledSocialPostsQuery} WHERE scheduled_social_posts.id = $1 LIMIT 1`,
+        [id],
+      );
     },
 
     async updateScheduledSocialPostStatus(id, status, patch = {}) {
@@ -1142,6 +1257,63 @@ export const createPostgresAdapter = (): StorageAdapter => {
       const result = await execute(`DELETE FROM ${socialAccountsTable} WHERE id = $1`, [
         id,
       ]);
+      return (result.rowCount ?? 0) > 0;
+    },
+
+    async getAutoPostAgentConfig() {
+      return queryRow<DbAutoPostAgentConfigRow>(
+        `SELECT * FROM ${autoPostAgentConfigTable} WHERE id = 'default' LIMIT 1`,
+        [],
+      );
+    },
+
+    async upsertAutoPostAgentConfig(row) {
+      await execute(
+        `
+          INSERT INTO ${autoPostAgentConfigTable} (
+            id, enabled, cadence_json, posts_per_run, target_account_ids_json,
+            image_style, timezone, last_run_at, updated_by_user_id, updated_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          ON CONFLICT(id) DO UPDATE SET
+            enabled = EXCLUDED.enabled,
+            cadence_json = EXCLUDED.cadence_json,
+            posts_per_run = EXCLUDED.posts_per_run,
+            target_account_ids_json = EXCLUDED.target_account_ids_json,
+            image_style = EXCLUDED.image_style,
+            timezone = EXCLUDED.timezone,
+            last_run_at = EXCLUDED.last_run_at,
+            updated_by_user_id = EXCLUDED.updated_by_user_id,
+            updated_at = EXCLUDED.updated_at
+        `,
+        [
+          row.id,
+          row.enabled,
+          row.cadence_json,
+          row.posts_per_run,
+          row.target_account_ids_json,
+          row.image_style,
+          row.timezone,
+          row.last_run_at,
+          row.updated_by_user_id,
+          row.updated_at,
+        ],
+      );
+    },
+
+    async claimAutoPostAgentRun(expectedLastRunAt, nowIso) {
+      const result =
+        expectedLastRunAt === null
+          ? await execute(
+              `UPDATE ${autoPostAgentConfigTable} SET last_run_at = $1
+               WHERE id = 'default' AND last_run_at IS NULL`,
+              [nowIso],
+            )
+          : await execute(
+              `UPDATE ${autoPostAgentConfigTable} SET last_run_at = $1
+               WHERE id = 'default' AND last_run_at = $2`,
+              [nowIso, expectedLastRunAt],
+            );
+
       return (result.rowCount ?? 0) > 0;
     },
   };

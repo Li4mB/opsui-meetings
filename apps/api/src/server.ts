@@ -13,6 +13,7 @@ import {
   registerSocialPostRoutes,
   startSocialPostScheduler,
 } from "./modules/social-posts.js";
+import { startAutoPostAgent } from "./modules/auto-post-agent.js";
 import { registerUserRoutes } from "./modules/users.js";
 import { initializeDatabase, seedAdminIfMissing } from "./db/database.js";
 
@@ -58,6 +59,7 @@ const buildServer = async () => {
   registerLoftRoutes(app);
   registerSocialPostRoutes(app);
   startSocialPostScheduler(app);
+  startAutoPostAgent(app);
 
   app.setErrorHandler((error: unknown, _request, reply) => {
     const appError =

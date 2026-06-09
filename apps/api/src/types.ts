@@ -66,6 +66,31 @@ export type DbAiPostImageGenerationRow = {
   created_at: string;
 };
 
+export type DbAiPostCaptionGenerationRow = {
+  id: string;
+  conversation_id: string;
+  prompt: string;
+  platform: string;
+  caption: string;
+  hashtags_json: string;
+  model: string;
+  created_by_user_id: string;
+  created_at: string;
+};
+
+export type DbAutoPostAgentConfigRow = {
+  id: string;
+  enabled: number;
+  cadence_json: string;
+  posts_per_run: number;
+  target_account_ids_json: string;
+  image_style: string;
+  timezone: string;
+  last_run_at: string | null;
+  updated_by_user_id: string | null;
+  updated_at: string;
+};
+
 export type DbMeetingRequestRow = {
   id: string;
   client_name: string;
@@ -100,7 +125,8 @@ export type DbScheduledSocialPostStatus =
   | "published"
   | "failed"
   | "connection_required"
-  | "cancelled";
+  | "cancelled"
+  | "pending_review";
 
 export type DbSocialPlatform = "facebook" | "linkedin" | "twitter" | "instagram";
 
