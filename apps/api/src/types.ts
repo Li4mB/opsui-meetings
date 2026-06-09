@@ -82,11 +82,15 @@ export type DbAutoPostAgentConfigRow = {
   id: string;
   enabled: number;
   cadence_json: string;
+  // Vestigial since the per-slot redesign (slots carry accounts + count); kept
+  // so upserts stay schema-compatible without a destructive migration.
   posts_per_run: number;
   target_account_ids_json: string;
   image_style: string;
   timezone: string;
   last_run_at: string | null;
+  // JSON map slotId -> last-fired ISO; per-slot restart-safe claim state.
+  slot_runs_json: string;
   updated_by_user_id: string | null;
   updated_at: string;
 };

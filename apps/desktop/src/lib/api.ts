@@ -13,6 +13,9 @@ import {
   aiPostChatRequestSchema,
   aiPostChatResponseSchema,
   autoPostAgentConfigResponseSchema,
+  bulkReviewSocialPostsInputSchema,
+  duplicateScheduledPostInputSchema,
+  editScheduledPostCaptionInputSchema,
   reviewSocialPostInputSchema,
   updateAutoPostAgentConfigInputSchema,
   authBootstrapSchema,
@@ -45,6 +48,11 @@ const DEFAULT_API_BASE_URL = import.meta.env.DEV
 
 const API_BASE_URL =
   import.meta.env.VITE_OPSUI_API_BASE_URL ?? DEFAULT_API_BASE_URL;
+
+// Full-resolution image for a scheduled post (the assets route is unauthenticated,
+// so this can be used directly as an <img> src).
+export const scheduledPostImageUrl = (postId: string) =>
+  `${API_BASE_URL}/social-posts/assets/${encodeURIComponent(postId)}/image`;
 
 const buildCandidateApiBaseUrls = () => {
   const urls = [API_BASE_URL];
@@ -429,6 +437,61 @@ export const deleteScheduledSocialPost = (token: string, postId: string) =>
       method: "POST",
       headers: withToken(token),
       body: JSON.stringify({}),
+    },
+    scheduledSocialPostsResponseSchema,
+  );
+
+export const editScheduledPostCaption = (
+  token: string,
+  postId: string,
+  input: z.infer<typeof editScheduledPostCaptionInputSchema>,
+) =>
+  request(
+    `/social-posts/${postId}/caption`,
+    {
+      method: "POST",
+      headers: withToken(token),
+      body: JSON.stringify(editScheduledPostCaptionInputSchema.parse(input)),
+    },
+    scheduledSocialPostsResponseSchema,
+  );
+
+export const duplicateScheduledPost = (
+  token: string,
+  postId: string,
+  input: z.infer<typeof duplicateScheduledPostInputSchema>,
+) =>
+  request(
+    `/social-posts/${postId}/duplicate`,
+    {
+      method: "POST",
+      headers: withToken(token),
+      body: JSON.stringify(duplicateScheduledPostInputSchema.parse(input)),
+    },
+    scheduledSocialPostsResponseSchema,
+  );
+
+export const publishScheduledPostNow = (token: string, postId: string) =>
+  request(
+    `/social-posts/${postId}/publish-now`,
+    {
+      method: "POST",
+      headers: withToken(token),
+      body: JSON.stringify({}),
+    },
+    publishSocialPostsResponseSchema,
+  );
+
+export const bulkReviewSocialPosts = (
+  token: string,
+  input: z.infer<typeof bulkReviewSocialPostsInputSchema>,
+) =>
+  request(
+    "/social-posts/review-bulk",
+    {
+      method: "POST",
+      headers: withToken(token),
+      body: JSON.stringify(bulkReviewSocialPostsInputSchema.parse(input)),
     },
     scheduledSocialPostsResponseSchema,
   );

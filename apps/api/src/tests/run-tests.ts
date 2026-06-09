@@ -459,3 +459,118 @@ describe("8. Scheduled Social Posts", () => {
     assert.equal(remaining[0].id, "twitter-nz");
   });
 });
+
+// ========== 9. Per-slot agent claim + per-account history ==========
+describe("9. Auto-post slots + per-account history", () => {
+  let db: string, adapter: StorageAdapter, admin: DbUserRow;
+
+  before(async () => {
+    db = mkTemp(); env.dbPath = db;
+    adapter = createSqliteAdapter(); await adapter.initialize(); await adapter.seedAdminIfMissing();
+    admin = (await adapter.findActiveUserByUsername("opsui-admin"))!;
+    const now = new Date().toISOString();
+    await adapter.upsertAutoPostAgentConfig({
+      id: "default",
+      enabled: 1,
+      cadence_json: JSON.stringify({ mode: "slots", slots: [] }),
+      posts_per_run: 1,
+      target_account_ids_json: "[]",
+      image_style: "realistic",
+      timezone: "Pacific/Auckland",
+      last_run_at: null,
+      slot_runs_json: "{}",
+      updated_by_user_id: admin.id,
+      updated_at: now,
+    });
+  });
+  after(async () => { await adapter.close(); cleanup(db); });
+
+  it("claims each timeslot independently and is restart-safe (compare-and-swap)", async () => {
+    // First claim of slot-1 wins.
+    assert.equal(await adapter.claimAutoPostAgentSlot("slot-1", null, "T1"), true);
+    // Re-claim with the stale expected (null) loses — already advanced to T1.
+    assert.equal(await adapter.claimAutoPostAgentSlot("slot-1", null, "T2"), false);
+    // Claim with the correct expected (T1) wins.
+    assert.equal(await adapter.claimAutoPostAgentSlot("slot-1", "T1", "T3"), true);
+    // A different slot is independent — its first claim still wins.
+    assert.equal(await adapter.claimAutoPostAgentSlot("slot-2", null, "T1"), true);
+
+    const row = await adapter.getAutoPostAgentConfig();
+    const runs = JSON.parse(row!.slot_runs_json) as Record<string, string>;
+    assert.equal(runs["slot-1"], "T3");
+    assert.equal(runs["slot-2"], "T1");
+  });
+
+  it("lists posts per account, capped, newest-first, excluding null/other statuses", async () => {
+    const base = (over: Partial<DbScheduledSocialPostRow>): DbScheduledSocialPostRow => ({
+      id: nanoid(),
+      platform: "twitter",
+      account_id: "acc-a",
+      caption: "c",
+      image_data_url: null,
+      image_name: null,
+      thumbnail_data_url: null,
+      scheduled_for: "2026-01-01T00:00:00.000Z",
+      timezone: "Pacific/Auckland",
+      status: "published",
+      status_message: null,
+      external_post_id: null,
+      published_at: "2026-01-01T00:00:00.000Z",
+      created_by_user_id: admin.id,
+      created_at: "2026-01-01T00:00:00.000Z",
+      updated_at: "2026-01-01T00:00:00.000Z",
+      ...over,
+    });
+
+    await adapter.insertScheduledSocialPosts([
+      base({ account_id: "acc-a", caption: "a-old", published_at: "2026-01-01T00:00:00.000Z" }),
+      base({ account_id: "acc-a", caption: "a-mid", published_at: "2026-02-01T00:00:00.000Z" }),
+      base({ account_id: "acc-a", caption: "a-new", published_at: "2026-03-01T00:00:00.000Z" }),
+      base({ account_id: "acc-b", caption: "b-1", published_at: "2026-02-15T00:00:00.000Z" }),
+      base({ account_id: null, caption: "no-account" }),
+      base({ account_id: "acc-a", caption: "a-scheduled", status: "scheduled" }),
+    ]);
+
+    const rows = await adapter.listPostsForAccounts(["acc-a", "acc-b"], ["published"], 2);
+    const captions = rows.map((r) => r.caption);
+    // acc-a capped at 2 newest published; acc-b 1; null account + scheduled excluded.
+    assert.equal(rows.length, 3);
+    assert.ok(captions.includes("a-new"));
+    assert.ok(captions.includes("a-mid"));
+    assert.ok(!captions.includes("a-old"));
+    assert.ok(!captions.includes("no-account"));
+    assert.ok(!captions.includes("a-scheduled"));
+    assert.ok(captions.includes("b-1"));
+  });
+
+  it("edits caption only on editable statuses", async () => {
+    const draft = nanoid();
+    const published = nanoid();
+    const ts = "2026-01-01T00:00:00.000Z";
+    await adapter.insertScheduledSocialPosts([
+      {
+        id: draft, platform: "twitter", account_id: "acc-a", caption: "before",
+        image_data_url: null, image_name: null, thumbnail_data_url: null,
+        scheduled_for: ts, timezone: "Pacific/Auckland", status: "pending_review",
+        status_message: null, external_post_id: null, published_at: null,
+        created_by_user_id: admin.id, created_at: ts, updated_at: ts,
+      },
+      {
+        id: published, platform: "twitter", account_id: "acc-a", caption: "locked",
+        image_data_url: null, image_name: null, thumbnail_data_url: null,
+        scheduled_for: ts, timezone: "Pacific/Auckland", status: "published",
+        status_message: null, external_post_id: null, published_at: ts,
+        created_by_user_id: admin.id, created_at: ts, updated_at: ts,
+      },
+    ]);
+
+    const editedDraft = await adapter.updateScheduledSocialPostCaption(draft, "after");
+    assert.equal(editedDraft!.caption, "after");
+
+    // Published is immutable: the guard rejects the edit and returns null so the
+    // route surfaces a 404 instead of a misleading success; caption is untouched.
+    const editedPublished = await adapter.updateScheduledSocialPostCaption(published, "hacked");
+    assert.equal(editedPublished, null);
+    assert.equal((await adapter.findScheduledSocialPostById(published))!.caption, "locked");
+  });
+});

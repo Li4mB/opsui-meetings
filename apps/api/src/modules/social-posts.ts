@@ -2,7 +2,10 @@ import {
   autoPostAgentCadenceSchema,
   autoPostAgentConfigSchema,
   autoPostAgentConfigResponseSchema,
+  bulkReviewSocialPostsInputSchema,
   connectSocialAccountInputSchema,
+  duplicateScheduledPostInputSchema,
+  editScheduledPostCaptionInputSchema,
   publishSocialPostsInputSchema,
   publishSocialPostsResponseSchema,
   rescheduleSocialPostInputSchema,
@@ -51,15 +54,31 @@ const parseStoredRefreshToken = (
 
 const defaultAutoPostAgentConfig = (): AutoPostAgentConfig => ({
   enabled: false,
-  cadence: { mode: "schedule", times: ["09:00"], days: [1, 2, 3, 4, 5] },
-  postsPerRun: 1,
-  targetAccountIds: [],
+  cadence: {
+    mode: "slots",
+    slots: [
+      { id: "default-slot", time: "09:00", days: [1, 2, 3, 4, 5], accountIds: [], postsPerRun: 1 },
+    ],
+  },
   imageStyle: "realistic",
   timezone: "Pacific/Auckland",
   lastRunAt: null,
+  slotRuns: {},
   updatedByUserName: null,
   updatedAt: null,
 });
+
+const parseSlotRuns = (slotRunsJson: string): Record<string, string | null> => {
+  try {
+    const parsed = JSON.parse(slotRunsJson || "{}") as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, string | null>;
+    }
+  } catch {
+    /* fall through to empty */
+  }
+  return {};
+};
 
 const toAutoPostAgentConfig = (
   row: DbAutoPostAgentConfigRow | null,
@@ -68,28 +87,19 @@ const toAutoPostAgentConfig = (
     return defaultAutoPostAgentConfig();
   }
 
+  // Old {mode:"schedule"}/{mode:"rate"} rows fail the slots schema and degrade
+  // to the default starter slot rather than crashing the endpoint.
   const cadence = autoPostAgentCadenceSchema.safeParse(
     JSON.parse(row.cadence_json || "{}"),
   );
-  let accountIds: string[] = [];
-
-  try {
-    const parsed = JSON.parse(row.target_account_ids_json) as unknown;
-    if (Array.isArray(parsed)) {
-      accountIds = parsed.filter((id): id is string => typeof id === "string");
-    }
-  } catch {
-    accountIds = [];
-  }
 
   return autoPostAgentConfigSchema.parse({
     enabled: row.enabled === 1,
     cadence: cadence.success ? cadence.data : defaultAutoPostAgentConfig().cadence,
-    postsPerRun: row.posts_per_run,
-    targetAccountIds: accountIds,
     imageStyle: row.image_style === "premium" ? "premium" : "realistic",
     timezone: row.timezone,
     lastRunAt: row.last_run_at,
+    slotRuns: parseSlotRuns(row.slot_runs_json),
     updatedByUserName: null,
     updatedAt: row.updated_at,
   });
@@ -539,6 +549,179 @@ export const registerSocialPostRoutes = (
     },
   );
 
+  // Bulk approve/reject pending_review drafts in one call.
+  app.post(
+    "/social-posts/review-bulk",
+    { preHandler: [authenticateRequest] },
+    async (request, reply) => {
+      if (!request.user) {
+        return reply.unauthorized("Missing authenticated user");
+      }
+
+      const input = bulkReviewSocialPostsInputSchema.parse(request.body);
+
+      for (const id of input.ids) {
+        const post = await storage.findScheduledSocialPostById(id);
+
+        if (!post || post.status !== "pending_review") {
+          continue;
+        }
+
+        if (input.action === "reject") {
+          await storage.deleteScheduledSocialPost(id);
+          continue;
+        }
+
+        const requested = new Date(post.scheduled_for);
+        const scheduledFor =
+          requested.getTime() > Date.now()
+            ? requested.toISOString()
+            : new Date(Date.now() + 60_000).toISOString();
+        await storage.approvePendingSocialPost(id, scheduledFor, post.timezone);
+      }
+
+      return scheduledPostsResponse();
+    },
+  );
+
+  // Inline-edit a draft/scheduled post's caption.
+  app.post(
+    "/social-posts/:id/caption",
+    { preHandler: [authenticateRequest] },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const input = editScheduledPostCaptionInputSchema.parse(request.body);
+      const trimmed = input.caption.trim();
+      const existing = await storage.findScheduledSocialPostById(id);
+
+      if (!existing) {
+        return reply.notFound("Post not found.");
+      }
+
+      // Mirror the create-time invariant: a post needs a caption or an image.
+      if (!trimmed && !existing.image_data_url) {
+        return reply.badRequest("Add a caption — this post has no image.");
+      }
+
+      const updated = await storage.updateScheduledSocialPostCaption(id, trimmed);
+
+      if (!updated) {
+        return reply.notFound("Post not found or its caption can't be edited.");
+      }
+
+      return scheduledPostsResponse();
+    },
+  );
+
+  // Publish an already-scheduled post immediately.
+  app.post(
+    "/social-posts/:id/publish-now",
+    { preHandler: [authenticateRequest] },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const post = await storage.findScheduledSocialPostById(id);
+
+      if (
+        !post ||
+        !["scheduled", "failed", "connection_required"].includes(post.status)
+      ) {
+        return reply.notFound("Post not found or can't be published now.");
+      }
+
+      await storage.updateScheduledSocialPostStatus(id, "publishing", {
+        statusMessage: "Publishing now.",
+      });
+      const current = await storage.findScheduledSocialPostById(id);
+      const publishedPosts: Array<ReturnType<typeof toScheduledSocialPost>> = [];
+
+      if (current) {
+        try {
+          const result = await publishScheduledSocialPost(current, {
+            publicBaseUrl: getRequestPublicBaseUrl(request),
+          });
+          const updated = await storage.updateScheduledSocialPostStatus(id, result.status, {
+            statusMessage: result.message,
+            externalPostId: result.externalPostId ?? null,
+            publishedAt:
+              result.status === "published" ? new Date().toISOString() : null,
+          });
+          if (updated) {
+            publishedPosts.push(toScheduledSocialPost(updated));
+          }
+        } catch (error) {
+          const updated = await storage.updateScheduledSocialPostStatus(id, "failed", {
+            statusMessage: error instanceof Error ? error.message : "Publish failed.",
+          });
+          if (updated) {
+            publishedPosts.push(toScheduledSocialPost(updated));
+          }
+        }
+      }
+
+      const response = await scheduledPostsResponse();
+
+      return publishSocialPostsResponseSchema.parse({ ...response, publishedPosts });
+    },
+  );
+
+  // Clone a post (incl. its image) into a new scheduled draft.
+  app.post(
+    "/social-posts/:id/duplicate",
+    { preHandler: [authenticateRequest] },
+    async (request, reply) => {
+      if (!request.user) {
+        return reply.unauthorized("Missing authenticated user");
+      }
+
+      const { id } = request.params as { id: string };
+      const input = duplicateScheduledPostInputSchema.parse(request.body);
+      const scheduledDate = new Date(input.scheduledFor);
+
+      if (scheduledDate.getTime() <= Date.now()) {
+        return reply.badRequest("Choose a future go-live time.");
+      }
+
+      const source = await storage.findScheduledSocialPostById(id);
+
+      if (!source) {
+        return reply.notFound("Post not found.");
+      }
+
+      if (source.status === "cancelled") {
+        return reply.badRequest("Cancelled posts can't be duplicated.");
+      }
+
+      // A review-queue draft clones back into the review queue so it can't skip
+      // approval; anything else clones into a normal scheduled post.
+      const isDraft = source.status === "pending_review";
+      const createdAt = new Date().toISOString();
+      await storage.insertScheduledSocialPosts([
+        {
+          id: `${source.platform}-${nanoid()}`,
+          platform: source.platform,
+          account_id: source.account_id,
+          caption: source.caption,
+          image_data_url: source.image_data_url,
+          image_name: source.image_name,
+          thumbnail_data_url: source.thumbnail_data_url,
+          scheduled_for: scheduledDate.toISOString(),
+          timezone: input.timezone,
+          status: isDraft ? "pending_review" : "scheduled",
+          status_message: isDraft
+            ? "Duplicated draft awaiting review."
+            : "Waiting for scheduled publish time.",
+          external_post_id: null,
+          published_at: null,
+          created_by_user_id: request.user.id,
+          created_at: createdAt,
+          updated_at: createdAt,
+        },
+      ]);
+
+      return scheduledPostsResponse();
+    },
+  );
+
   app.get(
     "/social-posts/agent-config",
     { preHandler: [authenticateRequest] },
@@ -564,17 +747,38 @@ export const registerSocialPostRoutes = (
       const existing = await storage.getAutoPostAgentConfig();
       const now = new Date().toISOString();
 
+      // Ensure every slot carries a stable id so its slot_runs entry survives
+      // edits/reordering (the schema requires one, but normalize defensively).
+      const normalizedCadence = {
+        mode: "slots" as const,
+        slots: input.cadence.slots.map((slot) => ({
+          ...slot,
+          id: slot.id.trim() || nanoid(),
+        })),
+      };
+
+      // Prune the per-slot run clock to the surviving slot ids so the blob can't
+      // accumulate orphaned entries as slots are renamed/removed over time.
+      const currentSlotIds = new Set(normalizedCadence.slots.map((slot) => slot.id));
+      const prunedSlotRuns = Object.fromEntries(
+        Object.entries(parseSlotRuns(existing?.slot_runs_json ?? "{}")).filter(
+          ([slotId]) => currentSlotIds.has(slotId),
+        ),
+      );
+
       await storage.upsertAutoPostAgentConfig({
         id: "default",
         enabled: input.enabled ? 1 : 0,
-        cadence_json: JSON.stringify(input.cadence),
-        posts_per_run: input.postsPerRun,
-        target_account_ids_json: JSON.stringify(input.targetAccountIds),
+        cadence_json: JSON.stringify(normalizedCadence),
+        // Vestigial columns since the per-slot redesign.
+        posts_per_run: 1,
+        target_account_ids_json: "[]",
         image_style: input.imageStyle,
         timezone: input.timezone,
         // Keep the run clock on re-enable so we don't immediately re-fire the
-        // current slot; only clear it when disabling.
+        // current slot; clear both clocks when disabling.
         last_run_at: input.enabled ? existing?.last_run_at ?? null : null,
+        slot_runs_json: input.enabled ? JSON.stringify(prunedSlotRuns) : "{}",
         updated_by_user_id: request.user.id,
         updated_at: now,
       });

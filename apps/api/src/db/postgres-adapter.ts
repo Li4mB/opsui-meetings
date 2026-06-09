@@ -154,6 +154,7 @@ const schemaSql = `
     image_style TEXT NOT NULL DEFAULT 'realistic',
     timezone TEXT NOT NULL DEFAULT 'Local timezone',
     last_run_at TEXT,
+    slot_runs_json TEXT NOT NULL DEFAULT '{}',
     updated_by_user_id TEXT,
     updated_at TEXT NOT NULL
   );
@@ -239,6 +240,9 @@ const schemaSql = `
   -- Reference the specific account a scheduled post targets.
   ALTER TABLE ${scheduledSocialPostsTable}
     ADD COLUMN IF NOT EXISTS account_id TEXT;
+  -- Per-slot last-fired state for the auto-post agent.
+  ALTER TABLE ${autoPostAgentConfigTable}
+    ADD COLUMN IF NOT EXISTS slot_runs_json TEXT NOT NULL DEFAULT '{}';
   -- Widen the status CHECK to allow the agent's 'pending_review' drafts.
   DO $$
   BEGIN
@@ -883,6 +887,36 @@ export const createPostgresAdapter = (): StorageAdapter => {
       );
     },
 
+    async listPostsForAccounts(accountIds, statuses, perAccountLimit) {
+      if (!accountIds.length || !statuses.length) {
+        return [];
+      }
+
+      // Window function caps rows PER account so per-account history is bounded.
+      return queryRows<DbScheduledSocialPostWithCreatorRow>(
+        `SELECT * FROM (
+           SELECT
+             scheduled_social_posts.*,
+             users.display_name AS created_by_user_name,
+             ROW_NUMBER() OVER (
+               PARTITION BY scheduled_social_posts.account_id
+               ORDER BY COALESCE(
+                 scheduled_social_posts.published_at,
+                 scheduled_social_posts.created_at
+               ) DESC, scheduled_social_posts.id DESC
+             ) AS rn
+           FROM ${scheduledSocialPostsTable} AS scheduled_social_posts
+           LEFT JOIN ${usersTable} AS users
+             ON users.id = scheduled_social_posts.created_by_user_id
+           WHERE scheduled_social_posts.account_id = ANY($1)
+             AND scheduled_social_posts.status = ANY($2)
+         ) sub
+         WHERE rn <= $3
+         ORDER BY account_id, COALESCE(published_at, created_at) DESC, id DESC`,
+        [accountIds, statuses, perAccountLimit],
+      );
+    },
+
     async listPublishedSocialPosts(limit) {
       return queryRows<DbScheduledSocialPostWithCreatorRow>(
         `${selectScheduledSocialPostsQuery}
@@ -1113,6 +1147,29 @@ export const createPostgresAdapter = (): StorageAdapter => {
       return (result.rowCount ?? 0) > 0;
     },
 
+    async updateScheduledSocialPostCaption(id, caption) {
+      const result = await execute(
+        `
+          UPDATE ${scheduledSocialPostsTable}
+          SET caption = $1, updated_at = $2
+          WHERE id = $3
+            AND status IN ('scheduled', 'failed', 'connection_required', 'pending_review')
+        `,
+        [caption, new Date().toISOString(), id],
+      );
+
+      // Status guard rejected the edit (or no such post): report no row so the
+      // caller returns a clear 404 instead of a misleading success.
+      if ((result.rowCount ?? 0) === 0) {
+        return null;
+      }
+
+      return queryRow<DbScheduledSocialPostWithCreatorRow>(
+        `${selectScheduledSocialPostsQuery} WHERE scheduled_social_posts.id = $1 LIMIT 1`,
+        [id],
+      );
+    },
+
     async approvePendingSocialPost(id, scheduledFor, timezone) {
       await execute(
         `
@@ -1272,8 +1329,9 @@ export const createPostgresAdapter = (): StorageAdapter => {
         `
           INSERT INTO ${autoPostAgentConfigTable} (
             id, enabled, cadence_json, posts_per_run, target_account_ids_json,
-            image_style, timezone, last_run_at, updated_by_user_id, updated_at
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+            image_style, timezone, last_run_at, slot_runs_json,
+            updated_by_user_id, updated_at
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
           ON CONFLICT(id) DO UPDATE SET
             enabled = EXCLUDED.enabled,
             cadence_json = EXCLUDED.cadence_json,
@@ -1282,6 +1340,7 @@ export const createPostgresAdapter = (): StorageAdapter => {
             image_style = EXCLUDED.image_style,
             timezone = EXCLUDED.timezone,
             last_run_at = EXCLUDED.last_run_at,
+            slot_runs_json = EXCLUDED.slot_runs_json,
             updated_by_user_id = EXCLUDED.updated_by_user_id,
             updated_at = EXCLUDED.updated_at
         `,
@@ -1294,25 +1353,35 @@ export const createPostgresAdapter = (): StorageAdapter => {
           row.image_style,
           row.timezone,
           row.last_run_at,
+          row.slot_runs_json,
           row.updated_by_user_id,
           row.updated_at,
         ],
       );
     },
 
-    async claimAutoPostAgentRun(expectedLastRunAt, nowIso) {
-      const result =
-        expectedLastRunAt === null
-          ? await execute(
-              `UPDATE ${autoPostAgentConfigTable} SET last_run_at = $1
-               WHERE id = 'default' AND last_run_at IS NULL`,
-              [nowIso],
-            )
-          : await execute(
-              `UPDATE ${autoPostAgentConfigTable} SET last_run_at = $1
-               WHERE id = 'default' AND last_run_at = $2`,
-              [nowIso, expectedLastRunAt],
-            );
+    async claimAutoPostAgentSlot(slotId, expectedLastFiredAt, nowIso) {
+      // One atomic statement: the jsonb merge sets just this slot's key, and the
+      // WHERE clause is the compare-and-swap (key absent when expected null, else
+      // current value matches). Safe across concurrent ticks/instances.
+      const result = await execute(
+        `UPDATE ${autoPostAgentConfigTable}
+         SET slot_runs_json = (
+               slot_runs_json::jsonb || jsonb_build_object($1::text, $2::text)
+             )::text,
+             last_run_at = $2
+         WHERE id = 'default'
+           AND (
+             -- Treat key-absent and key-present-with-JSON-null identically,
+             -- mirroring the SQLite adapter's null-coalescing semantics.
+             ($3::text IS NULL AND (
+               NOT (slot_runs_json::jsonb ? $1)
+               OR (slot_runs_json::jsonb -> $1) = 'null'::jsonb
+             ))
+             OR (slot_runs_json::jsonb ->> $1) = $3
+           )`,
+        [slotId, nowIso, expectedLastFiredAt],
+      );
 
       return (result.rowCount ?? 0) > 0;
     },

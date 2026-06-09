@@ -92,6 +92,10 @@ export const aiPostHistoryItemSchema = z.object({
   id: z.string(),
   createdAt: z.string(),
   platform: z.string().nullable(),
+  // Connected account this item belongs to (published posts only; null for
+  // generations). Additive + defaulted so existing construction sites stay valid.
+  accountId: z.string().nullable().default(null),
+  accountLabel: z.string().nullable().default(null),
   caption: z.string().nullable(),
   prompt: z.string().nullable(),
   imageName: z.string().nullable(),

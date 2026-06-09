@@ -92,6 +92,13 @@ export interface StorageAdapter {
   listPublishedSocialPosts(
     limit: number,
   ): Promise<DbScheduledSocialPostWithCreatorRow[]>;
+  // Newest-first posts for the given accounts in the given statuses, capped
+  // PER account (window function) so per-account history stays bounded.
+  listPostsForAccounts(
+    accountIds: string[],
+    statuses: DbScheduledSocialPostStatus[],
+    perAccountLimit: number,
+  ): Promise<DbScheduledSocialPostWithCreatorRow[]>;
   insertMeetingRequest(row: DbMeetingRequestRow): Promise<void>;
   findMeetingRequestById(id: string): Promise<DbMeetingRequestRow | null>;
   deleteMeetingRequestById(id: string): Promise<void>;
@@ -114,6 +121,11 @@ export interface StorageAdapter {
     timezone: string,
   ): Promise<DbScheduledSocialPostWithCreatorRow | null>;
   deleteScheduledSocialPost(id: string): Promise<boolean>;
+  // Edit a draft/scheduled post's caption (only on editable statuses).
+  updateScheduledSocialPostCaption(
+    id: string,
+    caption: string,
+  ): Promise<DbScheduledSocialPostWithCreatorRow | null>;
   approvePendingSocialPost(
     id: string,
     scheduledFor: string,
@@ -147,10 +159,12 @@ export interface StorageAdapter {
   deleteSocialAccount(id: string): Promise<boolean>;
   getAutoPostAgentConfig(): Promise<DbAutoPostAgentConfigRow | null>;
   upsertAutoPostAgentConfig(row: DbAutoPostAgentConfigRow): Promise<void>;
-  // Atomically win a cadence slot: set last_run_at=nowIso only if it still
-  // equals expectedLastRunAt. Returns true if this caller claimed the run.
-  claimAutoPostAgentRun(
-    expectedLastRunAt: string | null,
+  // Atomically win one timeslot: set slot_runs_json[slotId]=nowIso only if the
+  // slot's stored last-fired still equals expectedLastFiredAt. Returns true if
+  // this caller claimed the slot. Independent per slot + restart-safe.
+  claimAutoPostAgentSlot(
+    slotId: string,
+    expectedLastFiredAt: string | null,
     nowIso: string,
   ): Promise<boolean>;
 }

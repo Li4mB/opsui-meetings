@@ -149,6 +149,7 @@ const schemaSql = `
     image_style TEXT NOT NULL DEFAULT 'realistic',
     timezone TEXT NOT NULL DEFAULT 'Local timezone',
     last_run_at TEXT,
+    slot_runs_json TEXT NOT NULL DEFAULT '{}',
     updated_by_user_id TEXT,
     updated_at TEXT NOT NULL,
     FOREIGN KEY (updated_by_user_id) REFERENCES users(id) ON DELETE SET NULL
@@ -447,6 +448,12 @@ export const createSqliteAdapter = (): StorageAdapter => {
         "country TEXT NOT NULL DEFAULT 'Unknown'",
       );
       ensureColumn(db, "scheduled_social_posts", "account_id", "account_id TEXT");
+      ensureColumn(
+        db,
+        "auto_post_agent_config",
+        "slot_runs_json",
+        "slot_runs_json TEXT NOT NULL DEFAULT '{}'",
+      );
       dropSocialAccountsPlatformUnique(db);
       migrateScheduledPostsStatusCheck(db);
     },
@@ -957,6 +964,41 @@ export const createSqliteAdapter = (): StorageAdapter => {
         .all(limit);
     },
 
+    async listPostsForAccounts(accountIds, statuses, perAccountLimit) {
+      if (!accountIds.length || !statuses.length) {
+        return [];
+      }
+
+      const database = getDb();
+      const accountPlaceholders = accountIds.map(() => "?").join(", ");
+      const statusPlaceholders = statuses.map(() => "?").join(", ");
+
+      // Window function caps rows PER account so per-account history is bounded.
+      return database
+        .prepare<unknown[], DbScheduledSocialPostWithCreatorRow>(
+          `SELECT * FROM (
+             SELECT
+               scheduled_social_posts.*,
+               users.display_name AS created_by_user_name,
+               ROW_NUMBER() OVER (
+                 PARTITION BY scheduled_social_posts.account_id
+                 ORDER BY COALESCE(
+                   scheduled_social_posts.published_at,
+                   scheduled_social_posts.created_at
+                 ) DESC, scheduled_social_posts.id DESC
+               ) AS rn
+             FROM scheduled_social_posts
+             LEFT JOIN users ON users.id = scheduled_social_posts.created_by_user_id
+             WHERE scheduled_social_posts.account_id IN (${accountPlaceholders})
+               AND scheduled_social_posts.status IN (${statusPlaceholders})
+           )
+           WHERE rn <= ?
+           ORDER BY account_id,
+             COALESCE(published_at, created_at) DESC, id DESC`,
+        )
+        .all(...accountIds, ...statuses, perAccountLimit);
+    },
+
     async insertMeetingRequest(row) {
       const database = getDb();
       database.prepare(`
@@ -1182,6 +1224,30 @@ export const createSqliteAdapter = (): StorageAdapter => {
       return result.changes > 0;
     },
 
+    async updateScheduledSocialPostCaption(id, caption) {
+      const database = getDb();
+      const result = database.prepare(`
+        UPDATE scheduled_social_posts
+        SET caption = ?, updated_at = ?
+        WHERE id = ?
+          AND status IN ('scheduled', 'failed', 'connection_required', 'pending_review')
+      `).run(caption, new Date().toISOString(), id);
+
+      // Status guard rejected the edit (or no such post): report no row so the
+      // caller returns a clear 404 instead of a misleading success.
+      if (!result.changes) {
+        return null;
+      }
+
+      return (
+        database
+          .prepare<unknown[], DbScheduledSocialPostWithCreatorRow>(
+            `${selectScheduledSocialPostsQuery} WHERE scheduled_social_posts.id = ? LIMIT 1`,
+          )
+          .get(id) ?? null
+      );
+    },
+
     async approvePendingSocialPost(id, scheduledFor, timezone) {
       const database = getDb();
       database.prepare(`
@@ -1361,8 +1427,9 @@ export const createSqliteAdapter = (): StorageAdapter => {
         .prepare(`
           INSERT INTO auto_post_agent_config (
             id, enabled, cadence_json, posts_per_run, target_account_ids_json,
-            image_style, timezone, last_run_at, updated_by_user_id, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            image_style, timezone, last_run_at, slot_runs_json,
+            updated_by_user_id, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(id) DO UPDATE SET
             enabled = excluded.enabled,
             cadence_json = excluded.cadence_json,
@@ -1371,6 +1438,7 @@ export const createSqliteAdapter = (): StorageAdapter => {
             image_style = excluded.image_style,
             timezone = excluded.timezone,
             last_run_at = excluded.last_run_at,
+            slot_runs_json = excluded.slot_runs_json,
             updated_by_user_id = excluded.updated_by_user_id,
             updated_at = excluded.updated_at
         `)
@@ -1383,29 +1451,55 @@ export const createSqliteAdapter = (): StorageAdapter => {
           row.image_style,
           row.timezone,
           row.last_run_at,
+          row.slot_runs_json,
           row.updated_by_user_id,
           row.updated_at,
         );
     },
 
-    async claimAutoPostAgentRun(expectedLastRunAt, nowIso) {
+    async claimAutoPostAgentSlot(slotId, expectedLastFiredAt, nowIso) {
       const database = getDb();
-      const result =
-        expectedLastRunAt === null
-          ? database
-              .prepare(
-                `UPDATE auto_post_agent_config SET last_run_at = ?
-                 WHERE id = 'default' AND last_run_at IS NULL`,
-              )
-              .run(nowIso)
-          : database
-              .prepare(
-                `UPDATE auto_post_agent_config SET last_run_at = ?
-                 WHERE id = 'default' AND last_run_at = ?`,
-              )
-              .run(nowIso, expectedLastRunAt);
+      // Read-modify-write the slot_runs_json blob inside a transaction so the
+      // compare-and-swap is atomic against concurrent slot claims in one tick.
+      const claim = database.transaction((): boolean => {
+        const current = database
+          .prepare<unknown[], { slot_runs_json: string }>(
+            "SELECT slot_runs_json FROM auto_post_agent_config WHERE id = 'default'",
+          )
+          .get();
 
-      return result.changes > 0;
+        if (!current) {
+          return false;
+        }
+
+        let runs: Record<string, string | null> = {};
+        try {
+          const parsed = JSON.parse(current.slot_runs_json || "{}") as unknown;
+          if (parsed && typeof parsed === "object") {
+            runs = parsed as Record<string, string | null>;
+          }
+        } catch {
+          runs = {};
+        }
+
+        const stored = runs[slotId] ?? null;
+        if (stored !== expectedLastFiredAt) {
+          return false;
+        }
+
+        runs[slotId] = nowIso;
+        const result = database
+          .prepare(
+            `UPDATE auto_post_agent_config
+             SET slot_runs_json = ?, last_run_at = ?
+             WHERE id = 'default' AND slot_runs_json = ?`,
+          )
+          .run(JSON.stringify(runs), nowIso, current.slot_runs_json);
+
+        return result.changes > 0;
+      });
+
+      return claim();
     },
   };
 };

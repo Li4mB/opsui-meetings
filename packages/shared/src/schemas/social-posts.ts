@@ -121,27 +121,29 @@ export const connectSocialAccountInputSchema = z.object({
 });
 
 // ---- Auto-post agent (review-queue) ----
-export const autoPostAgentCadenceSchema = z.discriminatedUnion("mode", [
-  z.object({
-    mode: z.literal("schedule"),
-    // "HH:MM" 24h local times + ISO weekday numbers (0=Sun..6=Sat).
-    times: z.array(z.string().regex(/^\d{2}:\d{2}$/)).min(1).max(8),
-    days: z.array(z.number().int().min(0).max(6)).min(1).max(7),
-  }),
-  z.object({
-    mode: z.literal("rate"),
-    perDay: z.number().int().min(1).max(8),
-  }),
-]);
+// Each timeslot is independent: its own time, its own active days, and the
+// account(s) that post at it (empty accountIds = all connected accounts).
+export const autoPostAgentSlotSchema = z.object({
+  id: z.string().trim().min(1).max(64),
+  time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/), // "HH:MM" 24h local
+  days: z.array(z.number().int().min(0).max(6)).min(1).max(7), // 0=Sun..6=Sat
+  accountIds: z.array(z.string().min(1).max(240)).max(6),
+  postsPerRun: z.number().int().min(1).max(4).default(1),
+});
+
+export const autoPostAgentCadenceSchema = z.object({
+  mode: z.literal("slots"),
+  slots: z.array(autoPostAgentSlotSchema).max(12),
+});
 
 export const autoPostAgentConfigSchema = z.object({
   enabled: z.boolean(),
   cadence: autoPostAgentCadenceSchema,
-  postsPerRun: z.number().int().min(1).max(4),
-  targetAccountIds: z.array(z.string().min(1).max(240)).max(12),
   imageStyle: z.enum(["realistic", "premium"]),
   timezone: z.string().min(1).max(120),
   lastRunAt: z.string().nullable(),
+  // slotId -> last-fired ISO; runtime state, not operator-editable.
+  slotRuns: z.record(z.string(), z.string().nullable()).default({}),
   updatedByUserName: z.string().nullable(),
   updatedAt: z.string().nullable(),
 });
@@ -149,8 +151,6 @@ export const autoPostAgentConfigSchema = z.object({
 export const updateAutoPostAgentConfigInputSchema = z.object({
   enabled: z.boolean(),
   cadence: autoPostAgentCadenceSchema,
-  postsPerRun: z.number().int().min(1).max(4),
-  targetAccountIds: z.array(z.string().min(1).max(240)).max(12),
   imageStyle: z.enum(["realistic", "premium"]),
   timezone: z.string().min(1).max(120),
 });
@@ -167,6 +167,20 @@ export const reviewSocialPostInputSchema = z.object({
   timezone: z.string().min(1).max(120).optional(),
 });
 
+export const bulkReviewSocialPostsInputSchema = z.object({
+  ids: z.array(z.string().min(1).max(240)).min(1).max(50),
+  action: z.enum(["approve", "reject"]),
+});
+
+export const editScheduledPostCaptionInputSchema = z.object({
+  caption: z.string().max(4000),
+});
+
+export const duplicateScheduledPostInputSchema = z.object({
+  scheduledFor: z.string().datetime(),
+  timezone: z.string().min(1).max(120),
+});
+
 export type ScheduledSocialPlatform = z.infer<typeof scheduledSocialPlatformSchema>;
 export type ScheduledSocialPostStatus = z.infer<typeof scheduledSocialPostStatusSchema>;
 export type ScheduleSocialPostsInput = z.infer<typeof scheduleSocialPostsInputSchema>;
@@ -177,7 +191,11 @@ export type PublishSocialPostsResponse = z.infer<typeof publishSocialPostsRespon
 export type SocialAccount = z.infer<typeof socialAccountSchema>;
 export type SocialAccountsResponse = z.infer<typeof socialAccountsResponseSchema>;
 export type ConnectSocialAccountInput = z.infer<typeof connectSocialAccountInputSchema>;
+export type AutoPostAgentSlot = z.infer<typeof autoPostAgentSlotSchema>;
 export type AutoPostAgentCadence = z.infer<typeof autoPostAgentCadenceSchema>;
 export type AutoPostAgentConfig = z.infer<typeof autoPostAgentConfigSchema>;
 export type UpdateAutoPostAgentConfigInput = z.infer<typeof updateAutoPostAgentConfigInputSchema>;
 export type ReviewSocialPostInput = z.infer<typeof reviewSocialPostInputSchema>;
+export type BulkReviewSocialPostsInput = z.infer<typeof bulkReviewSocialPostsInputSchema>;
+export type EditScheduledPostCaptionInput = z.infer<typeof editScheduledPostCaptionInputSchema>;
+export type DuplicateScheduledPostInput = z.infer<typeof duplicateScheduledPostInputSchema>;

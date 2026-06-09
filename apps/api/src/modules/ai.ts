@@ -983,13 +983,11 @@ const dedupeByCaption = <T extends { caption: string | null }>(rows: T[]): T[] =
   });
 };
 
-const formatPublishedHistory = (posts: DbScheduledSocialPostWithCreatorRow[]) =>
-  dedupeByCaption(posts)
-    .map(
-      (post, index) =>
-        `${index + 1}. [${(post.published_at ?? post.created_at).slice(0, 10)} · ${post.platform}] ${trimForPrompt(post.caption, 220)}`,
-    )
-    .join("\n");
+// Per connected account, include up to this many of its OpsUI posts. The
+// overall prompt size is still bounded by trimForPrompt downstream.
+const PER_ACCOUNT_POST_CAP = 20;
+
+type ConnectedAccountLite = { id: string; platform: string; displayName: string };
 
 const formatCaptionGenHistory = (gens: DbAiPostCaptionGenerationRow[]) =>
   gens
@@ -999,12 +997,59 @@ const formatCaptionGenHistory = (gens: DbAiPostCaptionGenerationRow[]) =>
     )
     .join("\n");
 
+// Group published posts under each connected account so the planner sees, per
+// account, what that account has already posted (and avoids repeating it).
+const formatPerAccountHistory = (
+  connected: ConnectedAccountLite[],
+  posts: DbScheduledSocialPostWithCreatorRow[],
+) => {
+  const byAccount = new Map<string, DbScheduledSocialPostWithCreatorRow[]>();
+  for (const post of posts) {
+    if (!post.account_id) {
+      continue;
+    }
+    const list = byAccount.get(post.account_id) ?? [];
+    list.push(post);
+    byAccount.set(post.account_id, list);
+  }
+
+  return connected
+    .map((account) => {
+      const rows = dedupeByCaption(byAccount.get(account.id) ?? []);
+      const header = `Account ${account.displayName} (${account.platform})`;
+      if (!rows.length) {
+        return `${header}: no prior OpsUI posts.`;
+      }
+      const lines = rows
+        .map(
+          (post, index) =>
+            `  ${index + 1}. [${(post.published_at ?? post.created_at).slice(0, 10)}] ${trimForPrompt(post.caption, 200)}`,
+        )
+        .join("\n");
+      return `${header} — past OpsUI posts:\n${lines}`;
+    })
+    .join("\n\n");
+};
+
 const loadPostHistory = async (userId: string) => {
-  const [published, captionGens] = await Promise.all([
-    storage.listPublishedSocialPosts(15),
+  const connected = (await listConfiguredSocialAccounts())
+    .filter((account) => Boolean(account.accessToken))
+    .map(
+      (account): ConnectedAccountLite => ({
+        id: account.id,
+        platform: account.platform,
+        displayName: account.displayName,
+      }),
+    );
+  const accountIds = connected.map((account) => account.id);
+  const [posts, captionGens] = await Promise.all([
+    accountIds.length
+      ? storage.listPostsForAccounts(accountIds, ["published"], PER_ACCOUNT_POST_CAP)
+      : Promise.resolve([] as DbScheduledSocialPostWithCreatorRow[]),
     storage.listRecentAiPostCaptionGenerations(userId, 12),
   ]);
-  return { published, captionGens };
+  const accountById = new Map(connected.map((account) => [account.id, account]));
+  return { connected, accountById, posts, captionGens };
 };
 
 const buildHistoryContextBlock = (
@@ -1013,8 +1058,8 @@ const buildHistoryContextBlock = (
 ) =>
   trimForPrompt(
     [
-      history.published.length
-        ? `Published posts (most recent first):\n${formatPublishedHistory(history.published)}`
+      history.connected.length
+        ? `Per-account OpsUI post history (each account's own past posts):\n${formatPerAccountHistory(history.connected, history.posts)}`
         : "",
       history.captionGens.length
         ? `Recent caption drafts:\n${formatCaptionGenHistory(history.captionGens)}`
@@ -1028,25 +1073,30 @@ const buildHistoryContextBlock = (
 const toHistoryItems = (
   history: Awaited<ReturnType<typeof loadPostHistory>>,
 ): AiPostHistoryItem[] => [
-  ...history.published.map(
-    (post): AiPostHistoryItem => ({
+  ...history.posts.map((post): AiPostHistoryItem => {
+    const account = post.account_id ? history.accountById.get(post.account_id) : null;
+    return {
       kind: "published",
       id: post.id,
       createdAt: post.published_at ?? post.created_at,
       platform: post.platform,
+      accountId: post.account_id ?? null,
+      accountLabel: account?.displayName ?? null,
       caption: post.caption,
       prompt: null,
       imageName: post.image_name,
       thumbnailDataUrl: post.thumbnail_data_url,
       model: null,
-    }),
-  ),
+    };
+  }),
   ...history.captionGens.map(
     (gen): AiPostHistoryItem => ({
       kind: "caption",
       id: gen.id,
       createdAt: gen.created_at,
       platform: gen.platform,
+      accountId: null,
+      accountLabel: null,
       caption: gen.caption,
       prompt: gen.prompt,
       imageName: null,

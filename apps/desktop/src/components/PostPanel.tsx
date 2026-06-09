@@ -7,16 +7,21 @@ import type {
   AiPostImageStyle,
   AiPostPlan,
   AutoPostAgentConfig,
+  AutoPostAgentSlot,
   SocialAccount,
   ScheduledSocialPlatform,
   ScheduledSocialPost,
+  ScheduledSocialPostStatus,
 } from "@opsui/shared";
 import opsLogo from "../assets/op.png";
 import {
   ApiError,
+  bulkReviewSocialPosts,
   connectSocialAccount,
   deleteSocialAccount,
   deleteScheduledSocialPost,
+  duplicateScheduledPost,
+  editScheduledPostCaption,
   generatePostContent,
   generatePostImage,
   getAutoPostAgentConfig,
@@ -24,9 +29,11 @@ import {
   getScheduledSocialPosts,
   getSocialAccounts,
   planNextPost,
+  publishScheduledPostNow,
   publishSocialPosts,
   rescheduleSocialPost,
   reviewSocialPost,
+  scheduledPostImageUrl,
   scheduleSocialPosts,
   sendStrategyChat,
   updateAutoPostAgentConfig,
@@ -575,10 +582,26 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
   const [draggedScheduledPostId, setDraggedScheduledPostId] = useState<string | null>(null);
   const [scheduledDragPoint, setScheduledDragPoint] = useState<{ x: number; y: number } | null>(null);
   const [updatingScheduledPostIds, setUpdatingScheduledPostIds] = useState<string[]>([]);
+  // Schedule-queue revamp: view, filters, detail panel, bulk select
+  const [queueViewMode, setQueueViewMode] = useState<"calendar" | "agenda">("calendar");
+  const [queueFilters, setQueueFilters] = useState<{
+    platform: SocialPlatform | "all";
+    accountId: string | "all";
+    status: ScheduledSocialPostStatus | "all";
+  }>({ platform: "all", accountId: "all", status: "all" });
+  const [selectedQueuePostId, setSelectedQueuePostId] = useState<string | null>(null);
+  const [detailCaptionDraft, setDetailCaptionDraft] = useState("");
+  const [isSavingCaption, setIsSavingCaption] = useState(false);
+  const [selectedReviewIds, setSelectedReviewIds] = useState<string[]>([]);
+  const [isBulkBusy, setIsBulkBusy] = useState(false);
   // History / planner / assistant / auto-post agent
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
   const [historyItems, setHistoryItems] = useState<AiPostHistoryItem[]>([]);
   const [isHistoryLoading, setIsHistoryLoading] = useState(false);
+  const [historyFilter, setHistoryFilter] = useState<{
+    kind: "all" | "posts" | "generations";
+    accountId: string | "all";
+  }>({ kind: "all", accountId: "all" });
   const [isPlanning, setIsPlanning] = useState(false);
   const [planRationale, setPlanRationale] = useState<AiPostPlan | null>(null);
   const [isChatOpen, setIsChatOpen] = useState(false);
@@ -590,6 +613,7 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
   const [isSavingAgent, setIsSavingAgent] = useState(false);
   const masterCaptionInputRef = useRef<HTMLTextAreaElement | null>(null);
   const postImageRef = useRef<PostImage | null>(null);
+  const agentSaveSeqRef = useRef(0);
   const userTimezone = useMemo(getUserTimezone, []);
 
   const previewTime = useMemo(
@@ -612,9 +636,37 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
     () => [...scheduledPosts].sort(compareScheduledPosts),
     [scheduledPosts],
   );
+  const filteredScheduledPosts = useMemo(
+    () =>
+      sortedScheduledPosts.filter(
+        (post) =>
+          (queueFilters.platform === "all" || post.platform === queueFilters.platform) &&
+          (queueFilters.accountId === "all" || post.accountId === queueFilters.accountId) &&
+          (queueFilters.status === "all" || post.status === queueFilters.status),
+      ),
+    [sortedScheduledPosts, queueFilters],
+  );
   const calendarDays = useMemo(
-    () => buildCalendarDays(queueMonth, sortedScheduledPosts),
-    [queueMonth, sortedScheduledPosts],
+    () => buildCalendarDays(queueMonth, filteredScheduledPosts),
+    [queueMonth, filteredScheduledPosts],
+  );
+  const agendaGroups = useMemo(() => {
+    const groups = new Map<string, ScheduledSocialPost[]>();
+    for (const post of filteredScheduledPosts) {
+      const key = getLocalDateKey(new Date(post.scheduledFor));
+      const list = groups.get(key) ?? [];
+      list.push(post);
+      groups.set(key, list);
+    }
+    return [...groups.entries()];
+  }, [filteredScheduledPosts]);
+  const selectedQueuePost = useMemo(
+    () => scheduledPosts.find((post) => post.id === selectedQueuePostId) ?? null,
+    [scheduledPosts, selectedQueuePostId],
+  );
+  const pendingReviewVisible = useMemo(
+    () => filteredScheduledPosts.filter((post) => post.status === "pending_review"),
+    [filteredScheduledPosts],
   );
   const draggedScheduledPost = useMemo(
     () =>
@@ -658,6 +710,41 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
     () => scheduledPosts.filter((post) => post.status === "pending_review"),
     [scheduledPosts],
   );
+  // Distinct connected accounts that appear in the history (for the chips).
+  const historyAccounts = useMemo(() => {
+    const seen = new Map<string, string>();
+    for (const item of historyItems) {
+      if (item.accountId && !seen.has(item.accountId)) {
+        seen.set(item.accountId, item.accountLabel ?? item.platform ?? item.accountId);
+      }
+    }
+    return [...seen.entries()].map(([id, label]) => ({ id, label }));
+  }, [historyItems]);
+  const filteredHistoryItems = useMemo(
+    () =>
+      historyItems.filter(
+        (item) =>
+          (historyFilter.kind === "all" ||
+            (historyFilter.kind === "posts" && item.kind === "published") ||
+            (historyFilter.kind === "generations" && item.kind !== "published")) &&
+          (historyFilter.accountId === "all" || item.accountId === historyFilter.accountId),
+      ),
+    [historyItems, historyFilter],
+  );
+  // Group history by account (published) / "Caption drafts" (generations).
+  const historyGroups = useMemo(() => {
+    const groups = new Map<string, AiPostHistoryItem[]>();
+    for (const item of filteredHistoryItems) {
+      const label =
+        item.kind === "published"
+          ? item.accountLabel ?? item.platform ?? "Posts"
+          : "Caption drafts";
+      const list = groups.get(label) ?? [];
+      list.push(item);
+      groups.set(label, list);
+    }
+    return [...groups.entries()];
+  }, [filteredHistoryItems]);
   const queueMonthLabel = useMemo(
     () =>
       new Intl.DateTimeFormat(undefined, {
@@ -708,6 +795,12 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
       window.clearInterval(interval);
     };
   }, [authToken]);
+
+  // Clear any bulk-review selection when the filters change or the queue closes,
+  // so a stale selection can't act on posts the user can no longer see.
+  useEffect(() => {
+    setSelectedReviewIds([]);
+  }, [queueFilters, showScheduledQueue]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1050,6 +1143,47 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
     }
   };
 
+  const handleReuseHistory = (item: AiPostHistoryItem) => {
+    if (item.caption) {
+      setMasterCaption(item.caption);
+    }
+    if (item.prompt) {
+      setCaptionPrompt(item.prompt);
+    }
+    setIsHistoryOpen(false);
+    setSaveNotice("Loaded from history.");
+  };
+
+  const handleUseAsBasis = async (item: AiPostHistoryItem) => {
+    const basis = item.caption ?? item.prompt;
+    if (!basis) {
+      return;
+    }
+    if (!connectedAccounts.length) {
+      setSaveNotice("Connect an account before planning a post.");
+      return;
+    }
+
+    setIsHistoryOpen(false);
+    setIsPlanning(true);
+    try {
+      const plan = await planNextPost(authToken, {
+        targetAccountIds: selectedAccountIds,
+        guidance: `Use this past OpsUI post as the basis — produce a fresh, non-duplicate variation in the same spirit: ${basis}`,
+        timezone: userTimezone,
+        nowIso: new Date().toISOString(),
+      });
+      applyPlan(plan);
+      setSaveNotice("Drafted a new post based on that one.");
+    } catch (error) {
+      setSaveNotice(
+        error instanceof ApiError ? `Planner failed: ${error.message}` : "Planner unavailable.",
+      );
+    } finally {
+      setIsPlanning(false);
+    }
+  };
+
   const handleSendChat = async () => {
     const text = chatInput.trim();
 
@@ -1102,6 +1236,10 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
   };
 
   const saveAgentConfig = async (next: AutoPostAgentConfig) => {
+    // Sequence guard: rapid edits issue overlapping POSTs; only the most recent
+    // one is allowed to commit its server response so an out-of-order reply
+    // can't revert a newer edit.
+    const seq = (agentSaveSeqRef.current += 1);
     setAgentConfig(next);
     setIsSavingAgent(true);
 
@@ -1109,12 +1247,12 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
       const response = await updateAutoPostAgentConfig(authToken, {
         enabled: next.enabled,
         cadence: next.cadence,
-        postsPerRun: next.postsPerRun,
-        targetAccountIds: next.targetAccountIds,
         imageStyle: next.imageStyle,
         timezone: next.timezone,
       });
-      setAgentConfig(response.config);
+      if (agentSaveSeqRef.current === seq) {
+        setAgentConfig(response.config);
+      }
     } catch (error) {
       setSaveNotice(
         error instanceof ApiError
@@ -1123,12 +1261,16 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
       );
       try {
         const reverted = await getAutoPostAgentConfig(authToken);
-        setAgentConfig(reverted.config);
+        if (agentSaveSeqRef.current === seq) {
+          setAgentConfig(reverted.config);
+        }
       } catch {
         /* keep optimistic value if reload also fails */
       }
     } finally {
-      setIsSavingAgent(false);
+      if (agentSaveSeqRef.current === seq) {
+        setIsSavingAgent(false);
+      }
     }
   };
 
@@ -1165,6 +1307,203 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
     } finally {
       setScheduledPostUpdating(post.id, false);
     }
+  };
+
+  const handleSaveDetailCaption = async (post: ScheduledSocialPost) => {
+    setIsSavingCaption(true);
+    try {
+      const response = await editScheduledPostCaption(authToken, post.id, {
+        caption: detailCaptionDraft,
+      });
+      setScheduledPosts(response.posts);
+      setSaveNotice("Caption updated.");
+    } catch (error) {
+      setSaveNotice(
+        error instanceof ApiError ? `Caption save failed: ${error.message}` : "Caption save failed.",
+      );
+    } finally {
+      setIsSavingCaption(false);
+    }
+  };
+
+  const handlePublishNow = async (post: ScheduledSocialPost) => {
+    setScheduledPostUpdating(post.id, true);
+    try {
+      // pending_review drafts publish through the review-approve path.
+      const response =
+        post.status === "pending_review"
+          ? await reviewSocialPost(authToken, post.id, {
+              action: "approve",
+              publishNow: true,
+              scheduledFor: post.scheduledFor,
+              timezone: post.timezone,
+            })
+          : await publishScheduledPostNow(authToken, post.id);
+      setScheduledPosts(response.posts);
+      setSaveNotice("Publishing now.");
+    } catch (error) {
+      setSaveNotice(
+        error instanceof ApiError ? `Publish failed: ${error.message}` : "Publish failed.",
+      );
+    } finally {
+      setScheduledPostUpdating(post.id, false);
+    }
+  };
+
+  const handleDuplicatePost = async (post: ScheduledSocialPost) => {
+    setScheduledPostUpdating(post.id, true);
+    try {
+      // Clone to tomorrow at the same time; the user can drag/reschedule after.
+      const next = new Date(Date.now() + 24 * 60 * 60 * 1000);
+      const response = await duplicateScheduledPost(authToken, post.id, {
+        scheduledFor: next.toISOString(),
+        timezone: userTimezone,
+      });
+      setScheduledPosts(response.posts);
+      setSaveNotice("Post duplicated into the queue.");
+    } catch (error) {
+      setSaveNotice(
+        error instanceof ApiError ? `Duplicate failed: ${error.message}` : "Duplicate failed.",
+      );
+    } finally {
+      setScheduledPostUpdating(post.id, false);
+    }
+  };
+
+  const handleBulkReview = async (action: "approve" | "reject") => {
+    // Only act on drafts that are actually visible under the current filters, so
+    // a stale selection can't silently approve/reject hidden posts.
+    const ids = selectedReviewIds.filter((id) =>
+      pendingReviewVisible.some((post) => post.id === id),
+    );
+    if (!ids.length) {
+      setSelectedReviewIds([]);
+      return;
+    }
+    setIsBulkBusy(true);
+    try {
+      const response = await bulkReviewSocialPosts(authToken, { ids, action });
+      setScheduledPosts(response.posts);
+      setSelectedReviewIds([]);
+      setSaveNotice(
+        action === "approve" ? "Selected drafts approved." : "Selected drafts rejected.",
+      );
+    } catch (error) {
+      setSaveNotice(
+        error instanceof ApiError ? `Bulk review failed: ${error.message}` : "Bulk review failed.",
+      );
+    } finally {
+      setIsBulkBusy(false);
+    }
+  };
+
+  const toggleReviewSelection = (id: string) =>
+    setSelectedReviewIds((ids) =>
+      ids.includes(id) ? ids.filter((value) => value !== id) : [...ids, id],
+    );
+
+  const openQueueDetail = (post: ScheduledSocialPost) => {
+    setSelectedQueuePostId(post.id);
+    setDetailCaptionDraft(post.caption);
+  };
+
+  // Shared event card for both the calendar grid and the agenda list.
+  const renderQueueEvent = (event: ScheduledSocialPost) => {
+    const meta = platformById[event.platform];
+    const isUpdating = updatingScheduledPostIds.includes(event.id);
+    const accountLabel = event.accountId ? accountById[event.accountId]?.displayName : null;
+
+    return (
+      <article
+        className={[
+          "post-calendar-event",
+          canEditScheduledPost(event) ? "post-calendar-event--editable" : "",
+          isUpdating ? "post-calendar-event--updating" : "",
+          selectedQueuePostId === event.id ? "post-calendar-event--selected" : "",
+        ]
+          .filter(Boolean)
+          .join(" ")}
+        aria-grabbed={draggedScheduledPostId === event.id}
+        draggable={canEditScheduledPost(event)}
+        onDragEnd={() => setDraggedScheduledPostId(null)}
+        onDragStart={(dragEvent) => handleScheduledPostDragStart(dragEvent, event)}
+        onPointerDown={(pointerEvent) => handleScheduledPostPointerDown(pointerEvent, event)}
+        onClick={(clickEvent) => {
+          if (isInteractiveScheduledPostTarget(clickEvent.target)) {
+            return;
+          }
+          openQueueDetail(event);
+        }}
+        key={event.id}
+        title={`${meta.label} at ${formatScheduledTime(event.scheduledFor, event.timezone)} - ${event.statusMessage ?? event.status}`}
+      >
+        {event.status === "pending_review" ? (
+          <input
+            aria-label="Select draft for bulk review"
+            checked={selectedReviewIds.includes(event.id)}
+            className="post-calendar-event__check"
+            onChange={() => toggleReviewSelection(event.id)}
+            type="checkbox"
+          />
+        ) : null}
+        {event.thumbnailDataUrl ? (
+          <img
+            alt={event.imageName ?? `${meta.label} scheduled image`}
+            draggable={false}
+            src={event.thumbnailDataUrl}
+          />
+        ) : (
+          <span className="post-calendar-event__placeholder">{meta.shortLabel}</span>
+        )}
+        <div className="post-calendar-event__details">
+          <span>
+            {meta.label}
+            {accountLabel ? ` · ${accountLabel}` : ""}
+          </span>
+          <strong>{formatScheduledTime(event.scheduledFor, event.timezone)}</strong>
+          <small>{event.status.replace(/_/g, " ")}</small>
+          {(event.status === "failed" || event.status === "connection_required") &&
+          event.statusMessage ? (
+            <small className="post-calendar-event__error">{event.statusMessage}</small>
+          ) : null}
+        </div>
+        <div className="post-calendar-event__controls">
+          <input
+            aria-label={`Move ${meta.label} post time`}
+            disabled={!canEditScheduledPost(event) || isUpdating}
+            onChange={(changeEvent) => {
+              const nextDate = mergePostDateWithTime(event, changeEvent.target.value);
+              if (!Number.isNaN(nextDate.getTime())) {
+                void handleReschedulePost(event, nextDate);
+              }
+            }}
+            type="time"
+            value={formatTimeInputValue(new Date(event.scheduledFor))}
+          />
+          {event.status === "pending_review" ? (
+            <button
+              className="post-calendar-event__approve"
+              disabled={isUpdating}
+              onClick={() => void handleReviewPost(event, "approve")}
+              type="button"
+            >
+              Approve
+            </button>
+          ) : null}
+          <button
+            disabled={!canEditScheduledPost(event) || isUpdating}
+            onClick={() =>
+              void (event.status === "pending_review"
+                ? handleReviewPost(event, "reject")
+                : handleRemoveScheduledPost(event))
+            }
+            type="button"
+          >
+            {event.status === "pending_review" ? "Reject" : "Remove"}
+          </button>
+        </div>
+      </article>
+    );
   };
 
   const handleGenerateImage = async () => {
@@ -1943,12 +2282,16 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
               {canManageSocialAccounts && agentConfig
                 ? (() => {
                     const agent = agentConfig;
-                    const schedule =
-                      agent.cadence.mode === "schedule"
-                        ? agent.cadence
-                        : { mode: "schedule" as const, times: ["09:00"], days: [1, 2, 3, 4, 5] };
+                    const slots = agent.cadence.slots;
                     const patch = (partial: Partial<AutoPostAgentConfig>) =>
                       void saveAgentConfig({ ...agent, timezone: userTimezone, ...partial });
+                    const setSlots = (next: AutoPostAgentSlot[]) =>
+                      patch({ cadence: { mode: "slots", slots: next } });
+                    const updateSlot = (
+                      id: string,
+                      partialSlot: Partial<AutoPostAgentSlot>,
+                    ) =>
+                      setSlots(slots.map((s) => (s.id === id ? { ...s, ...partialSlot } : s)));
 
                     return (
                       <div className="post-agent">
@@ -1957,7 +2300,7 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
                             <strong>Auto-post agent</strong>
                             <small>
                               {agent.enabled
-                                ? "On — drafting posts into your review queue"
+                                ? `On — ${slots.length} timeslot${slots.length === 1 ? "" : "s"} drafting into your review queue`
                                 : "Off"}
                             </small>
                           </div>
@@ -1983,117 +2326,120 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
 
                         {isAgentExpanded ? (
                           <div className="post-agent__settings">
-                            <div className="post-agent__field">
-                              <span>Post on</span>
-                              <div className="post-platform-selector">
-                                {calendarWeekdays.map((label, day) => (
-                                  <button
-                                    className={`post-platform-btn ${schedule.days.includes(day) ? "post-platform-btn--active" : ""}`}
-                                    key={day}
-                                    onClick={() =>
-                                      patch({
-                                        cadence: {
-                                          ...schedule,
-                                          days: schedule.days.includes(day)
-                                            ? schedule.days.filter((d) => d !== day)
-                                            : [...schedule.days, day].sort((a, b) => a - b),
-                                        },
-                                      })
-                                    }
-                                    type="button"
-                                  >
-                                    {label}
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
+                            <div className="post-agent__slots">
+                              {slots.map((slot) => (
+                                <div className="post-agent-slot" key={slot.id}>
+                                  <div className="post-agent-slot__head">
+                                    <input
+                                      aria-label="Timeslot time"
+                                      onChange={(event) =>
+                                        updateSlot(slot.id, { time: event.target.value })
+                                      }
+                                      type="time"
+                                      value={slot.time}
+                                    />
+                                    <button
+                                      aria-label="Remove timeslot"
+                                      className="post-agent-slot__remove"
+                                      onClick={() =>
+                                        setSlots(slots.filter((s) => s.id !== slot.id))
+                                      }
+                                      type="button"
+                                    >
+                                      ×
+                                    </button>
+                                  </div>
 
-                            <div className="post-agent__field">
-                              <span>At</span>
-                              <div className="post-agent-time-row">
-                                {schedule.times.map((time, index) => (
-                                  <input
-                                    key={index}
-                                    onChange={(event) =>
-                                      patch({
-                                        cadence: {
-                                          ...schedule,
-                                          times: schedule.times.map((value, idx) =>
-                                            idx === index ? event.target.value : value,
-                                          ),
-                                        },
-                                      })
-                                    }
-                                    type="time"
-                                    value={time}
-                                  />
-                                ))}
-                                {schedule.times.length < 8 ? (
-                                  <button
-                                    className="post-account-add"
-                                    onClick={() =>
-                                      patch({
-                                        cadence: { ...schedule, times: [...schedule.times, "12:00"] },
-                                      })
-                                    }
-                                    type="button"
-                                  >
-                                    + time
-                                  </button>
-                                ) : null}
-                                {schedule.times.length > 1 ? (
-                                  <button
-                                    className="post-account-add"
-                                    onClick={() =>
-                                      patch({
-                                        cadence: { ...schedule, times: schedule.times.slice(0, -1) },
-                                      })
-                                    }
-                                    type="button"
-                                  >
-                                    − time
-                                  </button>
-                                ) : null}
-                              </div>
-                            </div>
+                                  <div className="post-agent-slot__field">
+                                    <span>Days</span>
+                                    <div className="post-platform-selector">
+                                      {calendarWeekdays.map((label, day) => (
+                                        <button
+                                          className={`post-platform-btn ${slot.days.includes(day) ? "post-platform-btn--active" : ""}`}
+                                          key={day}
+                                          onClick={() => {
+                                            const nextDays = slot.days.includes(day)
+                                              ? slot.days.filter((d) => d !== day)
+                                              : [...slot.days, day].sort((a, b) => a - b);
+                                            if (nextDays.length) {
+                                              updateSlot(slot.id, { days: nextDays });
+                                            }
+                                          }}
+                                          type="button"
+                                        >
+                                          {label}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
 
-                            <div className="post-agent__field">
-                              <span>Posts per run</span>
-                              <div className="post-platform-selector">
-                                {[1, 2, 3, 4].map((count) => (
-                                  <button
-                                    className={`post-platform-btn ${agent.postsPerRun === count ? "post-platform-btn--active" : ""}`}
-                                    key={count}
-                                    onClick={() => patch({ postsPerRun: count })}
-                                    type="button"
-                                  >
-                                    {count}
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
+                                  <div className="post-agent-slot__field">
+                                    <span>Accounts (none = all connected)</span>
+                                    <div className="post-platform-selector">
+                                      {connectedAccounts.map((account) => (
+                                        <button
+                                          className={`post-platform-btn ${slot.accountIds.includes(account.id) ? "post-platform-btn--active" : ""}`}
+                                          key={account.id}
+                                          onClick={() =>
+                                            updateSlot(slot.id, {
+                                              accountIds: slot.accountIds.includes(account.id)
+                                                ? slot.accountIds.filter((id) => id !== account.id)
+                                                : [...slot.accountIds, account.id],
+                                            })
+                                          }
+                                          type="button"
+                                        >
+                                          <span>{platformById[account.platform].shortLabel}</span>
+                                          {account.displayName}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
 
-                            <div className="post-agent__field">
-                              <span>Accounts (none selected = all connected)</span>
-                              <div className="post-platform-selector">
-                                {connectedAccounts.map((account) => (
-                                  <button
-                                    className={`post-platform-btn ${agent.targetAccountIds.includes(account.id) ? "post-platform-btn--active" : ""}`}
-                                    key={account.id}
-                                    onClick={() =>
-                                      patch({
-                                        targetAccountIds: agent.targetAccountIds.includes(account.id)
-                                          ? agent.targetAccountIds.filter((id) => id !== account.id)
-                                          : [...agent.targetAccountIds, account.id],
-                                      })
-                                    }
-                                    type="button"
-                                  >
-                                    <span>{platformById[account.platform].shortLabel}</span>
-                                    {account.displayName}
-                                  </button>
-                                ))}
-                              </div>
+                                  <div className="post-agent-slot__field">
+                                    <span>Posts</span>
+                                    <div className="post-platform-selector">
+                                      {[1, 2, 3, 4].map((count) => (
+                                        <button
+                                          className={`post-platform-btn ${slot.postsPerRun === count ? "post-platform-btn--active" : ""}`}
+                                          key={count}
+                                          onClick={() => updateSlot(slot.id, { postsPerRun: count })}
+                                          type="button"
+                                        >
+                                          {count}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
+                                </div>
+                              ))}
+
+                              {slots.length < 12 ? (
+                                <button
+                                  className="post-account-add"
+                                  onClick={() =>
+                                    setSlots([
+                                      ...slots,
+                                      {
+                                        id: crypto.randomUUID(),
+                                        time: "12:00",
+                                        days: [1, 2, 3, 4, 5],
+                                        accountIds: [],
+                                        postsPerRun: 1,
+                                      },
+                                    ])
+                                  }
+                                  type="button"
+                                >
+                                  + Add timeslot
+                                </button>
+                              ) : null}
+
+                              {!slots.length ? (
+                                <p className="post-account-hint">
+                                  No timeslots yet — add one to start drafting.
+                                </p>
+                              ) : null}
                             </div>
 
                             <div className="post-agent__field">
@@ -2113,9 +2459,9 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
                             </div>
 
                             <p className="post-account-hint">
-                              The agent plans and generates posts (with the hardlocked OpsUI
-                              references) into your review queue on this schedule. Nothing
-                              publishes until you approve it from History.
+                              Timezone {userTimezone}. Each timeslot plans &amp; generates posts
+                              (with the hardlocked OpsUI references) for its account(s) into your
+                              review queue. Nothing publishes until you approve it.
                             </p>
                           </div>
                         ) : null}
@@ -2346,202 +2692,363 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
           aria-labelledby="post-calendar-title"
         >
           <div className="post-schedule-modal__backdrop" onClick={() => setShowScheduledQueue(false)} />
-          <section className="post-calendar-dialog" aria-label="Scheduled social post queue">
-            <div className="post-calendar-panel__header">
-              <div>
-                <span className="eyebrow">Scheduled queue</span>
-                <h2 id="post-calendar-title">{queueMonthLabel}</h2>
-                <p>
-                  {isScheduledQueueLoading
-                    ? "Loading shared queue..."
-                    : sortedScheduledPosts.length
-                    ? `${sortedScheduledPosts.length} scheduled platform post${sortedScheduledPosts.length === 1 ? "" : "s"}`
-                    : "No scheduled posts yet"}
-                </p>
-              </div>
-              <div className="post-calendar-actions">
-                <button onClick={() => shiftQueueMonth(-1)} type="button">
-                  Prev
-                </button>
-                <button onClick={() => setQueueMonth(new Date())} type="button">
-                  Today
-                </button>
-                <button onClick={() => shiftQueueMonth(1)} type="button">
-                  Next
-                </button>
-                <button
-                  className="post-calendar-close-btn"
-                  onClick={() => setShowScheduledQueue(false)}
-                  type="button"
-                  aria-label="Close post calendar"
-                >
-                  x
-                </button>
-              </div>
-            </div>
-
-            <div className="post-calendar-grid">
-              {calendarWeekdays.map((weekday) => (
-                <div className="post-calendar-weekday" key={weekday}>
-                  {weekday}
+          <section
+            className={`post-calendar-dialog ${selectedQueuePost ? "post-calendar-dialog--with-detail" : ""}`}
+            aria-label="Scheduled social post queue"
+          >
+            <div className="post-queue-main">
+              <div className="post-calendar-panel__header">
+                <div>
+                  <span className="eyebrow">Scheduled queue</span>
+                  <h2 id="post-calendar-title">
+                    {queueViewMode === "calendar" ? queueMonthLabel : "Agenda"}
+                  </h2>
+                  <p>
+                    {isScheduledQueueLoading
+                      ? "Loading shared queue..."
+                      : `${filteredScheduledPosts.length} post${filteredScheduledPosts.length === 1 ? "" : "s"}${filteredScheduledPosts.length !== sortedScheduledPosts.length ? ` of ${sortedScheduledPosts.length}` : ""}`}
+                  </p>
                 </div>
-              ))}
-              {calendarDays.map((day) => (
-                <div
-                  className={[
-                    "post-calendar-day",
-                    day.inCurrentMonth ? "" : "post-calendar-day--muted",
-                    draggedScheduledPostId ? "post-calendar-day--drop-ready" : "",
-                    getLocalDateKey(day.date) === getLocalDateKey(new Date())
-                      ? "post-calendar-day--today"
-                      : "",
-                  ]
-                    .filter(Boolean)
-                    .join(" ")}
-                  onDragOver={(event) => {
-                    event.preventDefault();
-                    event.dataTransfer.dropEffect = "move";
-                  }}
-                  onDrop={(event) => handleCalendarDayDrop(event, day.date)}
-                  data-post-calendar-day={day.key}
-                  key={day.key}
-                >
-                  <div className="post-calendar-day__number">{day.date.getDate()}</div>
-                  <div className="post-calendar-day__events">
-                    {day.events.slice(0, 3).map((event) => {
-                      const meta = platformById[event.platform];
-
-                      return (
-                        <article
-                          className={[
-                            "post-calendar-event",
-                            canEditScheduledPost(event) ? "post-calendar-event--editable" : "",
-                            updatingScheduledPostIds.includes(event.id) ? "post-calendar-event--updating" : "",
-                          ]
-                            .filter(Boolean)
-                            .join(" ")}
-                          aria-grabbed={draggedScheduledPostId === event.id}
-                          draggable={canEditScheduledPost(event)}
-                          onDragEnd={() => setDraggedScheduledPostId(null)}
-                          onDragStart={(dragEvent) => handleScheduledPostDragStart(dragEvent, event)}
-                          onPointerDown={(pointerEvent) => handleScheduledPostPointerDown(pointerEvent, event)}
-                          key={event.id}
-                          title={`${meta.label} at ${formatScheduledTime(event.scheduledFor, event.timezone)} - ${event.statusMessage ?? event.status}`}
-                        >
-                          {event.thumbnailDataUrl ? (
-                            <img
-                              alt={event.imageName ?? `${meta.label} scheduled image`}
-                              draggable={false}
-                              src={event.thumbnailDataUrl}
-                            />
-                          ) : (
-                            <span className="post-calendar-event__placeholder">
-                              {meta.shortLabel}
-                            </span>
-                          )}
-                          <div className="post-calendar-event__details">
-                            <span>{meta.label}</span>
-                            <strong>{formatScheduledTime(event.scheduledFor, event.timezone)}</strong>
-                            <small>{event.status.replace(/_/g, " ")}</small>
-                            {(event.status === "failed" ||
-                              event.status === "connection_required") &&
-                            event.statusMessage ? (
-                              <small className="post-calendar-event__error">
-                                {event.statusMessage}
-                              </small>
-                            ) : null}
-                          </div>
-                          <div className="post-calendar-event__controls">
-                            <input
-                              aria-label={`Move ${meta.label} post time`}
-                              disabled={!canEditScheduledPost(event) || updatingScheduledPostIds.includes(event.id)}
-                              onChange={(changeEvent) => {
-                                const nextDate = mergePostDateWithTime(event, changeEvent.target.value);
-
-                                if (!Number.isNaN(nextDate.getTime())) {
-                                  void handleReschedulePost(event, nextDate);
-                                }
-                              }}
-                              type="time"
-                              value={formatTimeInputValue(new Date(event.scheduledFor))}
-                            />
-                            {event.status === "pending_review" ? (
-                              <button
-                                className="post-calendar-event__approve"
-                                disabled={updatingScheduledPostIds.includes(event.id)}
-                                onClick={() => void handleReviewPost(event, "approve")}
-                                type="button"
-                              >
-                                Approve
-                              </button>
-                            ) : null}
-                            <button
-                              disabled={!canEditScheduledPost(event) || updatingScheduledPostIds.includes(event.id)}
-                              onClick={() =>
-                                void (event.status === "pending_review"
-                                  ? handleReviewPost(event, "reject")
-                                  : handleRemoveScheduledPost(event))
-                              }
-                              type="button"
-                            >
-                              {event.status === "pending_review" ? "Reject" : "Remove"}
-                            </button>
-                          </div>
-                        </article>
-                      );
-                    })}
-                    {day.events.length > 3 ? (
-                      <span className="post-calendar-more">+{day.events.length - 3} more</span>
-                    ) : null}
-                  </div>
+                <div className="post-calendar-actions">
+                  {queueViewMode === "calendar" ? (
+                    <>
+                      <button onClick={() => shiftQueueMonth(-1)} type="button">
+                        Prev
+                      </button>
+                      <button onClick={() => setQueueMonth(new Date())} type="button">
+                        Today
+                      </button>
+                      <button onClick={() => shiftQueueMonth(1)} type="button">
+                        Next
+                      </button>
+                    </>
+                  ) : null}
+                  <button
+                    className="post-calendar-close-btn"
+                    onClick={() => setShowScheduledQueue(false)}
+                    type="button"
+                    aria-label="Close post calendar"
+                  >
+                    x
+                  </button>
                 </div>
-              ))}
-            </div>
+              </div>
 
-            {draggedScheduledPost && scheduledDragPoint
-              ? (() => {
-                  const meta = platformById[draggedScheduledPost.platform];
+              <div className="post-queue-toolbar">
+                <div className="post-queue-filters">
+                  <select
+                    aria-label="Filter by platform"
+                    onChange={(event) =>
+                      setQueueFilters((current) => ({
+                        ...current,
+                        platform: event.target.value as SocialPlatform | "all",
+                      }))
+                    }
+                    value={queueFilters.platform}
+                  >
+                    <option value="all">All platforms</option>
+                    {visiblePlatformIds.map((platform) => (
+                      <option key={platform} value={platform}>
+                        {platformById[platform].label}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    aria-label="Filter by account"
+                    onChange={(event) =>
+                      setQueueFilters((current) => ({
+                        ...current,
+                        accountId: event.target.value,
+                      }))
+                    }
+                    value={queueFilters.accountId}
+                  >
+                    <option value="all">All accounts</option>
+                    {connectedAccounts.map((account) => (
+                      <option key={account.id} value={account.id}>
+                        {account.displayName}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    aria-label="Filter by status"
+                    onChange={(event) =>
+                      setQueueFilters((current) => ({
+                        ...current,
+                        status: event.target.value as ScheduledSocialPostStatus | "all",
+                      }))
+                    }
+                    value={queueFilters.status}
+                  >
+                    <option value="all">All statuses</option>
+                    {(
+                      [
+                        "pending_review",
+                        "scheduled",
+                        "publishing",
+                        "published",
+                        "failed",
+                        "connection_required",
+                        "cancelled",
+                      ] as ScheduledSocialPostStatus[]
+                    ).map((status) => (
+                      <option key={status} value={status}>
+                        {status.replace(/_/g, " ")}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="post-queue-viewtoggle post-platform-selector">
+                  <button
+                    className={`post-platform-btn ${queueViewMode === "calendar" ? "post-platform-btn--active" : ""}`}
+                    onClick={() => setQueueViewMode("calendar")}
+                    type="button"
+                  >
+                    Calendar
+                  </button>
+                  <button
+                    className={`post-platform-btn ${queueViewMode === "agenda" ? "post-platform-btn--active" : ""}`}
+                    onClick={() => setQueueViewMode("agenda")}
+                    type="button"
+                  >
+                    Agenda
+                  </button>
+                </div>
+              </div>
 
-                  return (
-                    <article
-                      className="post-calendar-drag-ghost post-calendar-event"
-                      style={{
-                        transform: `translate(${scheduledDragPoint.x + 12}px, ${scheduledDragPoint.y + 12}px)`,
+              {pendingReviewVisible.length ? (
+                <div className="post-queue-bulkbar">
+                  <label>
+                    <input
+                      checked={
+                        selectedReviewIds.length === pendingReviewVisible.length &&
+                        pendingReviewVisible.length > 0
+                      }
+                      onChange={(event) =>
+                        setSelectedReviewIds(
+                          event.target.checked
+                            ? pendingReviewVisible.map((post) => post.id)
+                            : [],
+                        )
+                      }
+                      type="checkbox"
+                    />
+                    Select all ({pendingReviewVisible.length} pending)
+                  </label>
+                  <span>{selectedReviewIds.length} selected</span>
+                  <button
+                    disabled={!selectedReviewIds.length || isBulkBusy}
+                    onClick={() => void handleBulkReview("approve")}
+                    type="button"
+                  >
+                    Approve all
+                  </button>
+                  <button
+                    disabled={!selectedReviewIds.length || isBulkBusy}
+                    onClick={() => void handleBulkReview("reject")}
+                    type="button"
+                  >
+                    Reject all
+                  </button>
+                </div>
+              ) : null}
+
+              {queueViewMode === "calendar" ? (
+                <div className="post-calendar-grid">
+                  {calendarWeekdays.map((weekday) => (
+                    <div className="post-calendar-weekday" key={weekday}>
+                      {weekday}
+                    </div>
+                  ))}
+                  {calendarDays.map((day) => (
+                    <div
+                      className={[
+                        "post-calendar-day",
+                        day.inCurrentMonth ? "" : "post-calendar-day--muted",
+                        draggedScheduledPostId ? "post-calendar-day--drop-ready" : "",
+                        getLocalDateKey(day.date) === getLocalDateKey(new Date())
+                          ? "post-calendar-day--today"
+                          : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" ")}
+                      onDragOver={(event) => {
+                        event.preventDefault();
+                        event.dataTransfer.dropEffect = "move";
                       }}
+                      onDrop={(event) => handleCalendarDayDrop(event, day.date)}
+                      data-post-calendar-day={day.key}
+                      key={day.key}
                     >
-                      {draggedScheduledPost.thumbnailDataUrl ? (
-                        <img
-                          alt={draggedScheduledPost.imageName ?? `${meta.label} scheduled image`}
-                          draggable={false}
-                          src={draggedScheduledPost.thumbnailDataUrl}
-                        />
-                      ) : (
-                        <span className="post-calendar-event__placeholder">{meta.shortLabel}</span>
-                      )}
-                      <div className="post-calendar-event__details">
-                        <span>{meta.label}</span>
-                        <strong>{formatScheduledTime(draggedScheduledPost.scheduledFor, draggedScheduledPost.timezone)}</strong>
-                        <small>{draggedScheduledPost.status.replace(/_/g, " ")}</small>
+                      <div className="post-calendar-day__number">{day.date.getDate()}</div>
+                      <div className="post-calendar-day__events">
+                        {day.events.slice(0, 3).map((event) => renderQueueEvent(event))}
+                        {day.events.length > 3 ? (
+                          <span className="post-calendar-more">
+                            +{day.events.length - 3} more
+                          </span>
+                        ) : null}
                       </div>
-                      <div className="post-calendar-event__controls" aria-hidden="true">
-                        <input
-                          readOnly
-                          tabIndex={-1}
-                          type="time"
-                          value={formatTimeInputValue(new Date(draggedScheduledPost.scheduledFor))}
-                        />
-                        <button tabIndex={-1} type="button">
-                          Remove
-                        </button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="post-agenda-list">
+                  {agendaGroups.length ? (
+                    agendaGroups.map(([key, events]) => (
+                      <div className="post-agenda-day" key={key}>
+                        <h3>{formatScheduledDateTime(events[0].scheduledFor, userTimezone).split(",")[0]}</h3>
+                        <div className="post-agenda-day__events">
+                          {events.map((event) => renderQueueEvent(event))}
+                        </div>
                       </div>
-                    </article>
-                  );
-                })()
-              : null}
+                    ))
+                  ) : (
+                    <p className="post-calendar-note">No posts match these filters.</p>
+                  )}
+                </div>
+              )}
 
-            <p className="post-calendar-note">
-              Times use {userTimezone}. The queue is shared with every OpsUI member.
-            </p>
+              {draggedScheduledPost && scheduledDragPoint
+                ? (() => {
+                    const meta = platformById[draggedScheduledPost.platform];
+
+                    return (
+                      <article
+                        className="post-calendar-drag-ghost post-calendar-event"
+                        style={{
+                          transform: `translate(${scheduledDragPoint.x + 12}px, ${scheduledDragPoint.y + 12}px)`,
+                        }}
+                      >
+                        {draggedScheduledPost.thumbnailDataUrl ? (
+                          <img
+                            alt={draggedScheduledPost.imageName ?? `${meta.label} scheduled image`}
+                            draggable={false}
+                            src={draggedScheduledPost.thumbnailDataUrl}
+                          />
+                        ) : (
+                          <span className="post-calendar-event__placeholder">{meta.shortLabel}</span>
+                        )}
+                        <div className="post-calendar-event__details">
+                          <span>{meta.label}</span>
+                          <strong>{formatScheduledTime(draggedScheduledPost.scheduledFor, draggedScheduledPost.timezone)}</strong>
+                          <small>{draggedScheduledPost.status.replace(/_/g, " ")}</small>
+                        </div>
+                      </article>
+                    );
+                  })()
+                : null}
+
+              <p className="post-calendar-note">
+                Times use {userTimezone}. The queue is shared with every OpsUI member.
+                Click a post to edit, preview, publish now, or duplicate it.
+              </p>
+            </div>
+
+            {selectedQueuePost ? (
+              <aside className="post-queue-detail" aria-label="Post detail">
+                <div className="post-queue-detail__head">
+                  <strong>
+                    {platformById[selectedQueuePost.platform].label}
+                    {selectedQueuePost.accountId && accountById[selectedQueuePost.accountId]
+                      ? ` · ${accountById[selectedQueuePost.accountId].displayName}`
+                      : ""}
+                  </strong>
+                  <button
+                    aria-label="Close detail"
+                    className="post-calendar-close-btn"
+                    onClick={() => setSelectedQueuePostId(null)}
+                    type="button"
+                  >
+                    x
+                  </button>
+                </div>
+
+                <div className="post-queue-detail__preview">
+                  {selectedQueuePost.imageName || selectedQueuePost.thumbnailDataUrl ? (
+                    <img
+                      alt={selectedQueuePost.imageName ?? "Scheduled post image"}
+                      src={
+                        selectedQueuePost.imageName
+                          ? scheduledPostImageUrl(selectedQueuePost.id)
+                          : selectedQueuePost.thumbnailDataUrl ?? ""
+                      }
+                    />
+                  ) : (
+                    <div className="post-queue-detail__noimage">No image</div>
+                  )}
+                </div>
+
+                <small className="post-queue-detail__meta">
+                  {selectedQueuePost.status.replace(/_/g, " ")} ·{" "}
+                  {formatScheduledDateTime(selectedQueuePost.scheduledFor, selectedQueuePost.timezone)}
+                </small>
+
+                <textarea
+                  className="post-detail-caption"
+                  disabled={!canEditScheduledPost(selectedQueuePost)}
+                  onChange={(event) => setDetailCaptionDraft(event.target.value)}
+                  rows={6}
+                  value={detailCaptionDraft}
+                />
+
+                <div className="post-detail-actions">
+                  <button
+                    disabled={
+                      isSavingCaption ||
+                      !canEditScheduledPost(selectedQueuePost) ||
+                      detailCaptionDraft === selectedQueuePost.caption
+                    }
+                    onClick={() => void handleSaveDetailCaption(selectedQueuePost)}
+                    type="button"
+                  >
+                    {isSavingCaption ? "Saving..." : "Save caption"}
+                  </button>
+                  {selectedQueuePost.status === "pending_review" ? (
+                    <button
+                      disabled={updatingScheduledPostIds.includes(selectedQueuePost.id)}
+                      onClick={() => void handleReviewPost(selectedQueuePost, "approve")}
+                      type="button"
+                    >
+                      Approve
+                    </button>
+                  ) : null}
+                  <button
+                    disabled={
+                      updatingScheduledPostIds.includes(selectedQueuePost.id) ||
+                      !["scheduled", "failed", "connection_required", "pending_review"].includes(
+                        selectedQueuePost.status,
+                      )
+                    }
+                    onClick={() => void handlePublishNow(selectedQueuePost)}
+                    type="button"
+                  >
+                    Publish now
+                  </button>
+                  <button
+                    disabled={updatingScheduledPostIds.includes(selectedQueuePost.id)}
+                    onClick={() => void handleDuplicatePost(selectedQueuePost)}
+                    type="button"
+                  >
+                    Duplicate
+                  </button>
+                  <button
+                    disabled={
+                      !canEditScheduledPost(selectedQueuePost) ||
+                      updatingScheduledPostIds.includes(selectedQueuePost.id)
+                    }
+                    onClick={() =>
+                      void (selectedQueuePost.status === "pending_review"
+                        ? handleReviewPost(selectedQueuePost, "reject")
+                        : handleRemoveScheduledPost(selectedQueuePost))
+                    }
+                    type="button"
+                  >
+                    {selectedQueuePost.status === "pending_review" ? "Reject" : "Remove"}
+                  </button>
+                </div>
+              </aside>
+            ) : null}
           </section>
         </div>
       ) : null}
@@ -2835,50 +3342,106 @@ export const PostPanel = ({ authToken, canManageSocialAccounts }: Props) => {
 
             <div className="post-history-section">
               <span className="eyebrow">Recent posts &amp; generations</span>
+
+              <div className="post-history-filters">
+                {(
+                  [
+                    { key: "all", label: "All" },
+                    { key: "posts", label: "Posts" },
+                    { key: "generations", label: "Generations" },
+                  ] as Array<{ key: "all" | "posts" | "generations"; label: string }>
+                ).map((chip) => (
+                  <button
+                    className={`post-history-chip ${historyFilter.kind === chip.key ? "post-history-chip--active" : ""}`}
+                    key={chip.key}
+                    onClick={() =>
+                      setHistoryFilter((current) => ({ ...current, kind: chip.key }))
+                    }
+                    type="button"
+                  >
+                    {chip.label}
+                  </button>
+                ))}
+                {historyAccounts.length ? (
+                  <>
+                    <button
+                      className={`post-history-chip ${historyFilter.accountId === "all" ? "post-history-chip--active" : ""}`}
+                      onClick={() =>
+                        setHistoryFilter((current) => ({ ...current, accountId: "all" }))
+                      }
+                      type="button"
+                    >
+                      All accounts
+                    </button>
+                    {historyAccounts.map((account) => (
+                      <button
+                        className={`post-history-chip ${historyFilter.accountId === account.id ? "post-history-chip--active" : ""}`}
+                        key={account.id}
+                        onClick={() =>
+                          setHistoryFilter((current) => ({
+                            ...current,
+                            accountId: account.id,
+                          }))
+                        }
+                        type="button"
+                      >
+                        {account.label}
+                      </button>
+                    ))}
+                  </>
+                ) : null}
+              </div>
+
               {isHistoryLoading ? (
                 <p className="post-account-hint">Loading history…</p>
-              ) : historyItems.length ? (
-                <div className="post-history-list">
-                  {historyItems.map((item) => (
-                    <div className="post-history-item" key={`${item.kind}-${item.id}`}>
-                      {item.thumbnailDataUrl ? (
-                        <img alt="" src={item.thumbnailDataUrl} />
-                      ) : (
-                        <span className="post-calendar-event__placeholder">
-                          {item.kind === "published" ? "POST" : "DRAFT"}
-                        </span>
-                      )}
-                      <div className="post-history-item__body">
-                        <small>
-                          {item.kind === "published" ? "Published" : "Caption draft"}
-                          {item.platform ? ` · ${item.platform}` : ""} ·{" "}
-                          {formatScheduledDateTime(item.createdAt, userTimezone)}
-                        </small>
-                        <p>{item.caption ?? item.prompt}</p>
-                        <div className="post-history-item__actions">
-                          <button
-                            onClick={() => {
-                              if (item.caption) {
-                                setMasterCaption(item.caption);
-                              }
-                              if (item.prompt) {
-                                setCaptionPrompt(item.prompt);
-                              }
-                              setIsHistoryOpen(false);
-                              setSaveNotice("Loaded from history.");
-                            }}
-                            type="button"
-                          >
-                            Reuse
-                          </button>
+              ) : filteredHistoryItems.length ? (
+                historyGroups.map(([groupLabel, items]) => (
+                  <div className="post-history-group" key={groupLabel}>
+                    <span className="post-history-group__label eyebrow">{groupLabel}</span>
+                    <div className="post-history-list">
+                      {items.map((item) => (
+                        <div className="post-history-item" key={`${item.kind}-${item.id}`}>
+                          {item.thumbnailDataUrl ? (
+                            <img alt="" src={item.thumbnailDataUrl} />
+                          ) : (
+                            <span className="post-calendar-event__placeholder">
+                              {item.kind === "published" ? "POST" : "DRAFT"}
+                            </span>
+                          )}
+                          <div className="post-history-item__body">
+                            <small>
+                              {item.kind === "published" ? "Published" : "Caption draft"}
+                              {item.accountLabel
+                                ? ` · ${item.accountLabel}`
+                                : item.platform
+                                  ? ` · ${item.platform}`
+                                  : ""}{" "}
+                              · {formatScheduledDateTime(item.createdAt, userTimezone)}
+                            </small>
+                            <p>{item.caption ?? item.prompt}</p>
+                            <div className="post-history-item__actions">
+                              <button onClick={() => handleReuseHistory(item)} type="button">
+                                Reuse
+                              </button>
+                              <button
+                                disabled={isPlanning}
+                                onClick={() => void handleUseAsBasis(item)}
+                                type="button"
+                              >
+                                Use as basis
+                              </button>
+                            </div>
+                          </div>
                         </div>
-                      </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
+                  </div>
+                ))
               ) : (
                 <p className="post-account-hint">
-                  No history yet — publish a post or generate a caption to build context.
+                  {historyItems.length
+                    ? "No history matches these filters."
+                    : "No history yet — publish a post or generate a caption to build context."}
                 </p>
               )}
             </div>

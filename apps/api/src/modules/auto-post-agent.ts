@@ -1,7 +1,7 @@
 import { nanoid } from "nanoid";
 import sharp from "sharp";
 import { autoPostAgentCadenceSchema } from "@opsui/shared";
-import type { AutoPostAgentCadence } from "@opsui/shared";
+import type { AutoPostAgentSlot } from "@opsui/shared";
 import { storage } from "../db/database.js";
 import { generatePostImageForRequest, runPlanner } from "./ai.js";
 import { listConfiguredSocialAccounts } from "./social-publisher.js";
@@ -42,34 +42,33 @@ const getLocalParts = (timezone: string, now: Date) => {
   }
 };
 
-const shouldRunNow = (
-  cadence: AutoPostAgentCadence,
-  lastRunAt: string | null,
+// Each timeslot is independent: its own days + time, fired once per slot window.
+const shouldRunSlotNow = (
+  slot: AutoPostAgentSlot,
+  slotLastFiredAt: string | null,
   timezone: string,
   now: Date,
 ): boolean => {
-  const sinceLastMs = lastRunAt ? now.getTime() - new Date(lastRunAt).getTime() : Infinity;
-
-  if (cadence.mode === "rate") {
-    const minGapMs = Math.floor((24 * 60 * 60 * 1000) / cadence.perDay);
-    return sinceLastMs >= minGapMs;
-  }
-
-  // schedule mode: a configured slot on an allowed weekday, fired once per slot.
   const { weekday, totalMinutes } = getLocalParts(timezone, now);
 
-  if (!cadence.days.includes(weekday)) {
+  if (!slot.days.includes(weekday)) {
     return false;
   }
 
-  const inSlot = cadence.times.some((time) => {
-    const [h, m] = time.split(":").map(Number);
-    const slot = h * 60 + m;
-    return totalMinutes >= slot && totalMinutes < slot + AGENT_INTERVAL_MS / 60000;
-  });
+  const [h, m] = slot.time.split(":").map(Number);
+  const slotMin = h * 60 + m;
+  const inWindow =
+    totalMinutes >= slotMin && totalMinutes < slotMin + AGENT_INTERVAL_MS / 60000;
+
+  if (!inWindow) {
+    return false;
+  }
 
   // The > 30min guard stops the same slot window re-firing across ticks.
-  return inSlot && sinceLastMs > 30 * 60 * 1000;
+  const sinceMs = slotLastFiredAt
+    ? now.getTime() - new Date(slotLastFiredAt).getTime()
+    : Infinity;
+  return sinceMs > 30 * 60 * 1000;
 };
 
 const buildThumbnail = async (imageDataUrl: string): Promise<string | null> => {
@@ -103,59 +102,36 @@ const runAgentTick = async (
     JSON.parse(config.cadence_json || "{}"),
   );
 
-  if (!cadence.success) {
+  if (!cadence.success || !cadence.data.slots.length) {
     return;
+  }
+
+  let slotRuns: Record<string, string | null> = {};
+  try {
+    const parsed = JSON.parse(config.slot_runs_json || "{}") as unknown;
+    if (parsed && typeof parsed === "object") {
+      slotRuns = parsed as Record<string, string | null>;
+    }
+  } catch {
+    slotRuns = {};
   }
 
   const now = new Date();
+  const dueSlots = cadence.data.slots.filter((slot) =>
+    shouldRunSlotNow(slot, slotRuns[slot.id] ?? null, config.timezone, now),
+  );
 
-  if (!shouldRunNow(cadence.data, config.last_run_at, config.timezone, now)) {
+  if (!dueSlots.length) {
     return;
   }
 
-  // Don't generate while a backlog of unreviewed drafts is waiting.
+  // Shared draft budget across every slot firing this tick.
   const allPosts = await storage.listScheduledSocialPosts();
-  const outstanding = allPosts.filter(
-    (post) => post.status === "pending_review",
-  ).length;
+  let remainingBudget =
+    MAX_OUTSTANDING_DRAFTS -
+    allPosts.filter((post) => post.status === "pending_review").length;
 
-  if (outstanding >= MAX_OUTSTANDING_DRAFTS) {
-    return;
-  }
-
-  // Atomically win this slot before any (expensive) generation.
-  const claimed = await storage.claimAutoPostAgentRun(
-    config.last_run_at,
-    now.toISOString(),
-  );
-
-  if (!claimed) {
-    return;
-  }
-
-  let targetAccountIds: string[] = [];
-
-  try {
-    const parsed = JSON.parse(config.target_account_ids_json) as unknown;
-    if (Array.isArray(parsed)) {
-      targetAccountIds = parsed.filter((id): id is string => typeof id === "string");
-    }
-  } catch {
-    targetAccountIds = [];
-  }
-
-  const connected = (await listConfiguredSocialAccounts()).filter((account) =>
-    Boolean(account.accessToken),
-  );
-  const accountById = new Map(connected.map((account) => [account.id, account]));
-  const resolvedIds = (
-    targetAccountIds.length
-      ? targetAccountIds.filter((id) => accountById.has(id))
-      : connected.map((account) => account.id)
-  );
-
-  if (!resolvedIds.length) {
-    log.warn("Auto-post agent: no connected target accounts; skipping run.");
+  if (remainingBudget <= 0) {
     return;
   }
 
@@ -169,85 +145,114 @@ const runAgentTick = async (
     return;
   }
 
+  const connected = (await listConfiguredSocialAccounts()).filter((account) =>
+    Boolean(account.accessToken),
+  );
+  const accountById = new Map(connected.map((account) => [account.id, account]));
+
   const createdAt = now.toISOString();
   const rows: DbScheduledSocialPostRow[] = [];
-  const postsToCreate = Math.min(config.posts_per_run, 4);
 
-  for (let index = 0; index < postsToCreate; index += 1) {
-    try {
-      const plan = await runPlanner({
-        userId: ownerId,
-        targetAccountIds: resolvedIds,
-        guidance: `Prefer ${config.image_style} image style.`,
-        timezone: config.timezone,
-        nowIso: createdAt,
-      });
-      const image = await generatePostImageForRequest(
-        {
-          prompt: plan.imagePrompt,
-          caption: plan.caption,
-          tags: plan.hashtagBank.slice(0, 12),
-          conversationId: `agent-${ownerId}`,
-          style: plan.imageStyle,
-        },
-        ownerId,
-      );
-      const thumbnail = await buildThumbnail(image.imageDataUrl);
-      const scheduledFor = plan.suggestedPostTime.isoTime
-        ? new Date(plan.suggestedPostTime.isoTime).toISOString()
-        : new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
-      const statusMessage = `Auto-drafted (${plan.framework}): ${plan.angle}`.slice(
-        0,
-        500,
-      );
-      const enqueue = (accountId: string, caption: string) => {
-        const account = accountById.get(accountId);
+  for (const slot of dueSlots) {
+    if (remainingBudget <= 0) {
+      break;
+    }
 
-        if (!account) {
-          return false;
-        }
+    // The slot's accounts are authoritative (empty = all connected).
+    const slotAccountIds = slot.accountIds.length
+      ? slot.accountIds.filter((id) => accountById.has(id))
+      : connected.map((account) => account.id);
 
-        rows.push({
-          id: `${account.platform}-${nanoid()}`,
-          platform: account.platform,
-          account_id: account.id,
-          caption: caption.trim(),
-          image_data_url: image.imageDataUrl,
-          image_name: image.fileName,
-          thumbnail_data_url: thumbnail,
-          scheduled_for: scheduledFor,
+    if (!slotAccountIds.length) {
+      log.warn(`Auto-post agent: slot ${slot.id} has no connected accounts; skipping.`);
+      continue;
+    }
+
+    // Atomically win this slot before any (expensive) generation.
+    const claimed = await storage.claimAutoPostAgentSlot(
+      slot.id,
+      slotRuns[slot.id] ?? null,
+      createdAt,
+    );
+
+    if (!claimed) {
+      continue;
+    }
+
+    slotRuns[slot.id] = createdAt;
+    const postsToCreate = Math.min(slot.postsPerRun, 4);
+
+    for (let index = 0; index < postsToCreate; index += 1) {
+      if (remainingBudget <= 0) {
+        break;
+      }
+
+      try {
+        const plan = await runPlanner({
+          userId: ownerId,
+          targetAccountIds: slotAccountIds,
+          guidance: `Prefer ${config.image_style} image style.`,
           timezone: config.timezone,
-          status: "pending_review",
-          status_message: statusMessage,
-          external_post_id: null,
-          published_at: null,
-          created_by_user_id: ownerId,
-          created_at: createdAt,
-          updated_at: createdAt,
+          nowIso: createdAt,
         });
-        return true;
-      };
-
-      let queuedForPlan = 0;
-      for (const target of plan.recommendedAccounts) {
-        if (enqueue(target.accountId, target.captionTweak ?? plan.caption)) {
-          queuedForPlan += 1;
-        }
-      }
-
-      // The model may echo an unconnected/hallucinated id; never drop the post —
-      // fall back to all resolved target accounts so the draft isn't lost.
-      if (queuedForPlan === 0) {
-        log.warn(
-          "Auto-post agent: planner recommended no connected accounts; using all targets.",
+        const image = await generatePostImageForRequest(
+          {
+            prompt: plan.imagePrompt,
+            caption: plan.caption,
+            tags: plan.hashtagBank.slice(0, 12),
+            conversationId: `agent-${ownerId}`,
+            style: plan.imageStyle,
+          },
+          ownerId,
         );
-        for (const accountId of resolvedIds) {
-          enqueue(accountId, plan.caption);
+        const thumbnail = await buildThumbnail(image.imageDataUrl);
+        const scheduledFor = plan.suggestedPostTime.isoTime
+          ? new Date(plan.suggestedPostTime.isoTime).toISOString()
+          : new Date(now.getTime() + 24 * 60 * 60 * 1000).toISOString();
+        const statusMessage = `Auto-drafted (${plan.framework}): ${plan.angle}`.slice(
+          0,
+          500,
+        );
+        // Planner writes content + optional per-account caption tweaks; the
+        // SLOT decides which accounts the post goes to (not the planner).
+        const tweakByAccount = new Map(
+          plan.recommendedAccounts.map((target) => [target.accountId, target.captionTweak]),
+        );
+
+        for (const accountId of slotAccountIds) {
+          if (remainingBudget <= 0) {
+            break;
+          }
+
+          const account = accountById.get(accountId);
+          if (!account) {
+            continue;
+          }
+
+          rows.push({
+            id: `${account.platform}-${nanoid()}`,
+            platform: account.platform,
+            account_id: account.id,
+            caption: (tweakByAccount.get(accountId) ?? plan.caption).trim(),
+            image_data_url: image.imageDataUrl,
+            image_name: image.fileName,
+            thumbnail_data_url: thumbnail,
+            scheduled_for: scheduledFor,
+            timezone: config.timezone,
+            status: "pending_review",
+            status_message: statusMessage,
+            external_post_id: null,
+            published_at: null,
+            created_by_user_id: ownerId,
+            created_at: createdAt,
+            updated_at: createdAt,
+          });
+          remainingBudget -= 1;
         }
+      } catch (error) {
+        // Already claimed the slot, so a failure won't hot-loop.
+        log.error({ err: error }, "Auto-post agent: failed to draft a post.");
       }
-    } catch (error) {
-      // Already advanced last_run_at via the claim, so a failure won't hot-loop.
-      log.error({ err: error }, "Auto-post agent: failed to draft a post.");
     }
   }
 
