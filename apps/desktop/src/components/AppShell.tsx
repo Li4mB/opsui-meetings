@@ -5,6 +5,7 @@ import type {
   CreateMeetingRequestInput,
   CreateUserInput,
   LoftBooking,
+  LoftPackageKey,
   Meeting,
   MeetingRequest,
   Session,
@@ -81,6 +82,10 @@ type Props = {
     input: CreateMeetingRequestInput,
   ) => Promise<MeetingRequest>;
   onUnlockLoft: (password: string) => Promise<void>;
+  onSendLoftPaymentLink: (
+    bookingId: string,
+    packageKey: LoftPackageKey,
+  ) => Promise<void>;
 };
 
 const allCountryOptions: Array<{
@@ -140,6 +145,7 @@ export const AppShell = ({
   onDeleteUser,
   onCreateMeetingRequest,
   onUnlockLoft,
+  onSendLoftPaymentLink,
 }: Props) => {
   const [loftPassword, setLoftPassword] = useState("");
   const [loftSubmitting, setLoftSubmitting] = useState(false);
@@ -733,7 +739,10 @@ export const AppShell = ({
                 </div>
               </div>
 
-              <LoftList bookings={loftBookings} />
+              <LoftList
+                bookings={loftBookings}
+                onSendPaymentLink={onSendLoftPaymentLink}
+              />
             </>
           ) : activeSurfaceMode === "create" ? (
             <CreateMeetingPanel

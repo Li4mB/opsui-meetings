@@ -26,6 +26,8 @@ import {
   createUserInputSchema,
   loftAccessResponseSchema,
   loftBookingsResponseSchema,
+  sendLoftPaymentLinkResponseSchema,
+  type LoftPackageKey,
   meetingRequestSchema,
   meetingsResponseSchema,
   meetingSchema,
@@ -604,4 +606,19 @@ export const unlockLoft = (token: string, password: string) =>
       body: JSON.stringify({ password }),
     },
     loftAccessResponseSchema,
+  );
+
+export const sendLoftPaymentLink = (
+  token: string,
+  bookingId: string,
+  packageKey: LoftPackageKey,
+) =>
+  request(
+    `/loft/bookings/${encodeURIComponent(bookingId)}/payment-link`,
+    {
+      method: "POST",
+      headers: withToken(token),
+      body: JSON.stringify({ package: packageKey }),
+    },
+    sendLoftPaymentLinkResponseSchema,
   );

@@ -12,6 +12,7 @@ import type {
   AuthBootstrapUser,
   CreateMeetingRequestInput,
   CreateUserInput,
+  LoftPackageKey,
   LoginInput,
   Meeting,
   MeetingRequest,
@@ -36,6 +37,7 @@ import {
   getUsers,
   login,
   unlockLoft,
+  sendLoftPaymentLink,
   resolveMeeting,
   saveMeetingGuide,
   syncMeetings,
@@ -677,6 +679,19 @@ const App = () => {
     }
   };
 
+  const handleSendLoftPaymentLink = async (
+    bookingId: string,
+    packageKey: LoftPackageKey,
+  ) => {
+    if (!session) {
+      throw new Error("No active session");
+    }
+
+    // Throws on failure so LoftList can surface the error on the card.
+    const result = await sendLoftPaymentLink(session.token, bookingId, packageKey);
+    setSyncState("idle", `Payment link emailed to ${result.emailedTo}`);
+  };
+
   const handleResolveMeeting = async (meetingId: string) => {
     if (!session) {
       return;
@@ -1031,6 +1046,7 @@ const App = () => {
         updateCheckStatus.phase === "error" ? updateCheckStatus.message : null
       }
       onUnlockLoft={handleUnlockLoft}
+      onSendLoftPaymentLink={handleSendLoftPaymentLink}
       onUpdateUser={handleUpdateUser}
       selectedMeeting={selectedMeeting}
       session={session}

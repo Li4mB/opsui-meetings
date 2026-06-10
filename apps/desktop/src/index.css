@@ -2124,6 +2124,64 @@ label {
   font-size: 0.72rem;
 }
 
+/* LoftAU — send payment link row on each enquiry card */
+.loft-card__payment {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin-top: 0.85rem;
+  padding-top: 0.85rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.loft-card__package {
+  flex: 1 1 13rem;
+  min-width: 11rem;
+  padding: 0.55rem 0.7rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.04);
+  color: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.loft-card__payment .link-btn {
+  width: auto;
+  flex: 0 0 auto;
+  padding: 0.6rem 0.95rem;
+}
+
+.link-btn--payment {
+  background: rgba(105, 217, 255, 0.12);
+  border-color: rgba(105, 217, 255, 0.28);
+  color: #8fe0ff;
+}
+
+.link-btn--payment:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.loft-card__hint {
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.loft-card__error {
+  flex-basis: 100%;
+  font-size: 0.78rem;
+  color: #fca5a5;
+}
+
+.loft-card__sent {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: #6ee7b7;
+}
+
 .assignee-row {
   display: flex;
   align-items: center;

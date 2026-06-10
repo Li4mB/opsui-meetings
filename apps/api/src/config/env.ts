@@ -129,6 +129,15 @@ export const env = {
   xClientSecret: process.env.OPSUI_X_CLIENT_SECRET ?? "",
   loftIngestKey: process.env.OPSUI_LOFT_INGEST_KEY ?? "",
   loftAccessPassword: process.env.OPSUI_LOFT_ACCESS_PASSWORD ?? "0770",
+  loftStripePaymentLinkConnect: (
+    process.env.OPSUI_LOFT_STRIPE_PAYMENT_LINK_CONNECT ?? ""
+  ).trim(),
+  loftStripePaymentLinkAutomate: (
+    process.env.OPSUI_LOFT_STRIPE_PAYMENT_LINK_AUTOMATE ?? ""
+  ).trim(),
+  loftPaymentWebhookUrl: (
+    process.env.OPSUI_LOFT_PAYMENT_WEBHOOK_URL ?? ""
+  ).trim(),
   dbProvider,
   dbUrl,
   dbSsl: parseBoolean(process.env.OPSUI_DB_SSL, dbProvider === "postgres"),
