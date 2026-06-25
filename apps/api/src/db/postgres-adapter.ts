@@ -1269,6 +1269,9 @@ export const createPostgresAdapter = (): StorageAdapter => {
             ],
             client,
           );
+          if (row.external_id) {
+            existing.add(row.external_id);
+          }
           imported += 1;
         }
 

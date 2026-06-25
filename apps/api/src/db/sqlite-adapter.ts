@@ -1339,6 +1339,9 @@ export const createSqliteAdapter = (): StorageAdapter => {
               row.created_at,
               row.updated_at,
             );
+            if (row.external_id) {
+              existing.add(row.external_id);
+            }
             imported += 1;
           }
 

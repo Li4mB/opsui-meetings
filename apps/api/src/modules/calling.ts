@@ -15,7 +15,10 @@ import { z } from "zod";
 import { env } from "../config/env.js";
 import { storage } from "../db/database.js";
 import { authenticateRequest } from "./auth.js";
-import { fetchGoogleSheetProspects } from "./google-sheets-prospects.js";
+import {
+  fetchGoogleSheetProspects,
+  type SheetProspect,
+} from "./google-sheets-prospects.js";
 import type {
   AuthUser,
   DbCallingBatchRow,
@@ -100,6 +103,24 @@ const getConfiguredSpreadsheetIds = (sources: DbCallingSheetSourceRow[]) => [
     ...sources.map((source) => source.spreadsheet_id),
   ]),
 ];
+
+const dedupeSheetProspects = (prospects: SheetProspect[]) => {
+  const seenExternalIds = new Set<string>();
+  const deduped: SheetProspect[] = [];
+  let skipped = 0;
+
+  for (const prospect of prospects) {
+    if (seenExternalIds.has(prospect.externalId)) {
+      skipped += 1;
+      continue;
+    }
+
+    seenExternalIds.add(prospect.externalId);
+    deduped.push(prospect);
+  }
+
+  return { prospects: deduped, skipped };
+};
 
 const getCallingWorkspace = async () => {
   const [prospects, batches, calls, sheetSources, lastSheetSyncAt] =
@@ -485,7 +506,8 @@ export const registerCallingRoutes = (app: import("fastify").FastifyInstance) =>
         );
       }
 
-      const prospects = await fetchGoogleSheetProspects(spreadsheetIds);
+      const fetchedProspects = await fetchGoogleSheetProspects(spreadsheetIds);
+      const { prospects, skipped } = dedupeSheetProspects(fetchedProspects);
       const now = new Date().toISOString();
       const result = await storage.upsertCallingProspects(
         prospects.map((prospect) => ({
@@ -506,7 +528,10 @@ export const registerCallingRoutes = (app: import("fastify").FastifyInstance) =>
         })),
       );
 
-      return callingProspectsSyncResponseSchema.parse(result);
+      return callingProspectsSyncResponseSchema.parse({
+        ...result,
+        skipped: result.skipped + skipped,
+      });
     },
   );
 

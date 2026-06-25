@@ -16,6 +16,7 @@ import type { StorageAdapter } from "../db/adapter.js";
 import type {
   CalendarMeeting,
   DbAiPostImageGenerationRow,
+  DbCallingProspectRow,
   DbScheduledSocialPostRow,
   DbSocialAccountRow,
   DbUserRow,
@@ -621,5 +622,53 @@ describe("10. Google Sheets prospect import", () => {
     assert.ok(prospects[0].externalId.includes("https://www.google.com/maps/place/partmaster"));
     assert.ok(prospects[0].notes.includes("Website: http://partmaster.kiwi/"));
     assert.ok(prospects[0].notes.includes("Rating: 4.4 (34 reviews)"));
+  });
+
+  it("upserts duplicate sheet external IDs without violating uniqueness", async () => {
+    const db = mkTemp();
+    env.dbPath = db;
+    const adapter = createSqliteAdapter();
+
+    try {
+      await adapter.initialize();
+      await adapter.seedAdminIfMissing();
+      const admin = (await adapter.findActiveUserByUsername("opsui-admin"))!;
+      const now = new Date().toISOString();
+      const base: DbCallingProspectRow = {
+        id: nanoid(),
+        name: "First Company",
+        phone: "+64 9 111 1111",
+        company_name: "First Company",
+        email: null,
+        notes: "",
+        source: "google_sheet",
+        external_id: "google_sheet:sheet:test-url",
+        status: "new",
+        last_call_at: null,
+        last_call_outcome: null,
+        created_by_user_id: admin.id,
+        created_at: now,
+        updated_at: now,
+      };
+
+      const result = await adapter.upsertCallingProspects([
+        base,
+        {
+          ...base,
+          id: nanoid(),
+          name: "Updated Company",
+          company_name: "Updated Company",
+        },
+      ]);
+      const prospects = await adapter.listCallingProspects();
+
+      assert.equal(result.imported, 1);
+      assert.equal(result.updated, 1);
+      assert.equal(prospects.length, 1);
+      assert.equal(prospects[0].name, "Updated Company");
+    } finally {
+      await adapter.close();
+      cleanup(db);
+    }
   });
 });
