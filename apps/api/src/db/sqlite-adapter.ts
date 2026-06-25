@@ -13,6 +13,7 @@ import type {
   DbCallingBatchRow,
   DbCallingCallRow,
   DbCallingProspectRow,
+  DbCallingSheetSourceRow,
   DbLoftBookingRow,
   DbMeetingRequestRow,
   DbMeetingRow,
@@ -295,6 +296,19 @@ const schemaSql = `
 
   CREATE INDEX IF NOT EXISTS idx_calling_calls_status
     ON calling_calls(status, updated_at DESC);
+
+  CREATE TABLE IF NOT EXISTS calling_sheet_sources (
+    id TEXT PRIMARY KEY,
+    spreadsheet_id TEXT NOT NULL UNIQUE,
+    label TEXT NOT NULL,
+    created_by_user_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (created_by_user_id) REFERENCES users(id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_calling_sheet_sources_created
+    ON calling_sheet_sources(created_at DESC);
 `;
 
 const selectActiveMeetingsQuery = `
@@ -1577,6 +1591,49 @@ export const createSqliteAdapter = (): StorageAdapter => {
           )
           .get(callId) ?? null
       );
+    },
+
+    async listCallingSheetSources() {
+      const database = getDb();
+      return database
+        .prepare<unknown[], DbCallingSheetSourceRow>(
+          "SELECT * FROM calling_sheet_sources ORDER BY created_at DESC, label ASC",
+        )
+        .all();
+    },
+
+    async insertCallingSheetSource(row) {
+      const database = getDb();
+      database
+        .prepare(
+          `
+            INSERT INTO calling_sheet_sources (
+              id,
+              spreadsheet_id,
+              label,
+              created_by_user_id,
+              created_at,
+              updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+          `,
+        )
+        .run(
+          row.id,
+          row.spreadsheet_id,
+          row.label,
+          row.created_by_user_id,
+          row.created_at,
+          row.updated_at,
+        );
+    },
+
+    async deleteCallingSheetSource(id) {
+      const database = getDb();
+      const result = database
+        .prepare("DELETE FROM calling_sheet_sources WHERE id = ?")
+        .run(id);
+
+      return result.changes > 0;
     },
 
     async getLastCallingSheetSyncAt() {

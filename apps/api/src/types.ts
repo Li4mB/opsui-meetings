@@ -190,6 +190,15 @@ export type DbCallingCallRow = {
   updated_at: string;
 };
 
+export type DbCallingSheetSourceRow = {
+  id: string;
+  spreadsheet_id: string;
+  label: string;
+  created_by_user_id: string;
+  created_at: string;
+  updated_at: string;
+};
+
 export type DbScheduledSocialPostStatus =
   | "scheduled"
   | "publishing"

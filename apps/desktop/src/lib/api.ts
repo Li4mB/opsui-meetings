@@ -17,6 +17,7 @@ import {
   callingBatchStartResponseSchema,
   callingProspectSchema,
   callingProspectsSyncResponseSchema,
+  callingSheetSourceSchema,
   callingWorkspaceResponseSchema,
   duplicateScheduledPostInputSchema,
   editScheduledPostCaptionInputSchema,
@@ -48,6 +49,7 @@ import {
   userSchema,
   createCallingBatchInputSchema,
   createCallingProspectInputSchema,
+  createCallingSheetSourceInputSchema,
 } from "@opsui/shared";
 
 const DEFAULT_API_BASE_URL = import.meta.env.DEV
@@ -220,6 +222,26 @@ export const createCallingProspect = (
     },
     callingProspectSchema,
   );
+
+export const createCallingSheetSource = (
+  token: string,
+  input: z.infer<typeof createCallingSheetSourceInputSchema>,
+) =>
+  request(
+    "/calling/sheets",
+    {
+      method: "POST",
+      headers: withToken(token),
+      body: JSON.stringify(createCallingSheetSourceInputSchema.parse(input)),
+    },
+    callingSheetSourceSchema,
+  );
+
+export const deleteCallingSheetSource = (token: string, sheetSourceId: string) =>
+  request(`/calling/sheets/${encodeURIComponent(sheetSourceId)}`, {
+    method: "DELETE",
+    headers: withToken(token),
+  });
 
 export const syncCallingProspects = (token: string) =>
   request(

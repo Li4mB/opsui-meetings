@@ -4,12 +4,15 @@ import type {
   CallingCall,
   CallingProspect,
   CallingProspectStatus,
+  CallingSheetSource,
   CallingWorkspaceResponse,
 } from "@opsui/shared";
 import {
   ApiError,
   createCallingBatch,
   createCallingProspect,
+  createCallingSheetSource,
+  deleteCallingSheetSource,
   getCallingWorkspace,
   startNextCallingBatchCall,
   syncCallingProspects,
@@ -19,7 +22,7 @@ type Props = {
   authToken: string;
 };
 
-type CallingTab = "prospects" | "queue" | "add";
+type CallingTab = "prospects" | "queue" | "sheets" | "add";
 type ProspectFilter = "all" | CallingProspectStatus;
 
 const statusLabels: Record<CallingProspectStatus, string> = {
@@ -43,6 +46,7 @@ const callStatusLabels: Record<CallingCall["status"], string> = {
 const emptyProspects: CallingProspect[] = [];
 const emptyBatches: CallingBatch[] = [];
 const emptyCalls: CallingCall[] = [];
+const emptySheetSources: CallingSheetSource[] = [];
 
 const formatDateTime = (value: string | null) => {
   if (!value) {
@@ -96,6 +100,10 @@ export const CallingPanel = ({ authToken }: Props) => {
     email: "",
     notes: "",
   });
+  const [sheetForm, setSheetForm] = useState({
+    urlOrId: "",
+    label: "",
+  });
 
   const refreshWorkspace = useCallback(async (quiet = false) => {
     if (!quiet) {
@@ -119,6 +127,7 @@ export const CallingPanel = ({ authToken }: Props) => {
   const prospects = workspace?.prospects ?? emptyProspects;
   const batches = workspace?.batches ?? emptyBatches;
   const calls = workspace?.calls ?? emptyCalls;
+  const sheetSources = workspace?.sheetSources ?? emptySheetSources;
   const latestBatch = batches[0] ?? null;
   const activeBatch =
     batches.find((batch) => batch.status === "running" || batch.status === "queued") ??
@@ -293,6 +302,46 @@ export const CallingPanel = ({ authToken }: Props) => {
     }
   };
 
+  const handleCreateSheetSource = async (
+    event: React.FormEvent<HTMLFormElement>,
+  ) => {
+    event.preventDefault();
+    setIsBusy(true);
+    setError(null);
+    setMessage(null);
+
+    try {
+      const source = await createCallingSheetSource(authToken, {
+        urlOrId: sheetForm.urlOrId.trim(),
+        label: sheetForm.label.trim() || undefined,
+      });
+
+      setSheetForm({ urlOrId: "", label: "" });
+      await refreshWorkspace(true);
+      setMessage(`${source.label} is attached for future syncs.`);
+    } catch (createError) {
+      setError(getErrorMessage(createError, "Unable to attach the sheet."));
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
+  const handleDeleteSheetSource = async (source: CallingSheetSource) => {
+    setIsBusy(true);
+    setError(null);
+    setMessage(null);
+
+    try {
+      await deleteCallingSheetSource(authToken, source.id);
+      await refreshWorkspace(true);
+      setMessage(`${source.label} was removed from future syncs.`);
+    } catch (deleteError) {
+      setError(getErrorMessage(deleteError, "Unable to remove the sheet."));
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
   return (
     <section className="calling-panel">
       <div className="calling-panel__header">
@@ -361,6 +410,13 @@ export const CallingPanel = ({ authToken }: Props) => {
           type="button"
         >
           Queue
+        </button>
+        <button
+          className={`calling-tab ${activeTab === "sheets" ? "calling-tab--active" : ""}`}
+          onClick={() => setActiveTab("sheets")}
+          type="button"
+        >
+          Sheets
         </button>
         <button
           className={`calling-tab ${activeTab === "add" ? "calling-tab--active" : ""}`}
@@ -531,6 +587,79 @@ export const CallingPanel = ({ authToken }: Props) => {
               })
             ) : (
               <div className="calling-empty">No batch calls yet.</div>
+            )}
+          </div>
+        </div>
+      ) : activeTab === "sheets" ? (
+        <div className="calling-prospects">
+          <form
+            className="calling-form"
+            onSubmit={(event) => void handleCreateSheetSource(event)}
+          >
+            <div className="calling-form__grid">
+              <label>
+                Sheet URL or ID
+                <input
+                  onChange={(event) =>
+                    setSheetForm((current) => ({
+                      ...current,
+                      urlOrId: event.target.value,
+                    }))
+                  }
+                  required
+                  value={sheetForm.urlOrId}
+                />
+              </label>
+              <label>
+                Label
+                <input
+                  onChange={(event) =>
+                    setSheetForm((current) => ({
+                      ...current,
+                      label: event.target.value,
+                    }))
+                  }
+                  value={sheetForm.label}
+                />
+              </label>
+            </div>
+            <div className="calling-form__actions">
+              <button
+                className="header-action-button header-action-button--primary"
+                disabled={isBusy || !sheetForm.urlOrId.trim()}
+                type="submit"
+              >
+                {isBusy ? "Attaching..." : "Attach Sheet"}
+              </button>
+            </div>
+          </form>
+
+          <div className="calling-call-list">
+            {sheetSources.length ? (
+              sheetSources.map((source) => (
+                <div className="calling-call" key={source.id}>
+                  <div>
+                    <strong>{source.label}</strong>
+                    <span>{source.spreadsheetId}</span>
+                  </div>
+                  <span className="calling-status calling-status--new">Saved</span>
+                  <span>{formatDateTime(source.createdAt)}</span>
+                  <button
+                    className="header-action-button"
+                    disabled={isBusy}
+                    onClick={() => void handleDeleteSheetSource(source)}
+                    type="button"
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))
+            ) : (
+              <div className="calling-empty">
+                {workspace?.sheetConfigured
+                  ? "Registered default sheet is active."
+                  : "No sheets attached yet."}
+              </div>
             )}
           </div>
         </div>

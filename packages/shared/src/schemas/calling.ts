@@ -87,6 +87,15 @@ export const callingCallSchema = z.object({
   updatedAt: z.string(),
 });
 
+export const callingSheetSourceSchema = z.object({
+  id: z.string(),
+  spreadsheetId: z.string(),
+  label: z.string(),
+  createdByUserId: z.string(),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+});
+
 export const createCallingProspectInputSchema = z.object({
   name: z.string().min(2).max(100),
   phone: z.string().min(6).max(40),
@@ -97,6 +106,11 @@ export const createCallingProspectInputSchema = z.object({
 
 export const createCallingBatchInputSchema = z.object({
   prospectIds: z.array(z.string().min(1)).min(1).max(100),
+});
+
+export const createCallingSheetSourceInputSchema = z.object({
+  urlOrId: z.string().min(20).max(500),
+  label: z.string().max(120).optional(),
 });
 
 export const callingCallCompletionInputSchema = z.object({
@@ -113,6 +127,7 @@ export const callingWorkspaceResponseSchema = z.object({
   prospects: z.array(callingProspectSchema),
   batches: z.array(callingBatchSchema),
   calls: z.array(callingCallSchema),
+  sheetSources: z.array(callingSheetSourceSchema),
   webhookConfigured: z.boolean(),
   sheetConfigured: z.boolean(),
   lastSheetSyncAt: z.string().nullable(),
@@ -138,11 +153,15 @@ export type CallingCallOutcome = z.infer<typeof callingCallOutcomeSchema>;
 export type CallingProspect = z.infer<typeof callingProspectSchema>;
 export type CallingBatch = z.infer<typeof callingBatchSchema>;
 export type CallingCall = z.infer<typeof callingCallSchema>;
+export type CallingSheetSource = z.infer<typeof callingSheetSourceSchema>;
 export type CreateCallingProspectInput = z.infer<
   typeof createCallingProspectInputSchema
 >;
 export type CreateCallingBatchInput = z.infer<
   typeof createCallingBatchInputSchema
+>;
+export type CreateCallingSheetSourceInput = z.infer<
+  typeof createCallingSheetSourceInputSchema
 >;
 export type CallingCallCompletionInput = z.infer<
   typeof callingCallCompletionInputSchema

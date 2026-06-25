@@ -4,9 +4,11 @@ import {
   callingCallSchema,
   callingProspectSchema,
   callingProspectsSyncResponseSchema,
+  callingSheetSourceSchema,
   callingWorkspaceResponseSchema,
   createCallingBatchInputSchema,
   createCallingProspectInputSchema,
+  createCallingSheetSourceInputSchema,
 } from "@opsui/shared";
 import { nanoid } from "nanoid";
 import { z } from "zod";
@@ -19,6 +21,7 @@ import type {
   DbCallingBatchRow,
   DbCallingCallRow,
   DbCallingProspectRow,
+  DbCallingSheetSourceRow,
 } from "../types.js";
 
 const terminalCallStatuses = new Set([
@@ -74,11 +77,37 @@ const toCallingCall = (row: DbCallingCallRow) =>
     updatedAt: row.updated_at,
   });
 
+const toCallingSheetSource = (row: DbCallingSheetSourceRow) =>
+  callingSheetSourceSchema.parse({
+    id: row.id,
+    spreadsheetId: row.spreadsheet_id,
+    label: row.label,
+    createdByUserId: row.created_by_user_id,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  });
+
+const extractGoogleSpreadsheetId = (value: string) => {
+  const match = value.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+  return (match?.[1] ?? value).trim();
+};
+
+const isGoogleSpreadsheetId = (value: string) => /^[a-zA-Z0-9_-]{20,}$/.test(value);
+
+const getConfiguredSpreadsheetIds = (sources: DbCallingSheetSourceRow[]) => [
+  ...new Set([
+    ...env.googleProspectsSheetIds,
+    ...sources.map((source) => source.spreadsheet_id),
+  ]),
+];
+
 const getCallingWorkspace = async () => {
-  const [prospects, batches, calls, lastSheetSyncAt] = await Promise.all([
+  const [prospects, batches, calls, sheetSources, lastSheetSyncAt] =
+    await Promise.all([
     storage.listCallingProspects(),
     storage.listCallingBatches(25),
     storage.listCallingCalls(300),
+    storage.listCallingSheetSources(),
     storage.getLastCallingSheetSyncAt(),
   ]);
 
@@ -86,8 +115,9 @@ const getCallingWorkspace = async () => {
     prospects: prospects.map(toCallingProspect),
     batches: batches.map(toCallingBatch),
     calls: calls.map(toCallingCall),
+    sheetSources: sheetSources.map(toCallingSheetSource),
     webhookConfigured: Boolean(env.callingWebhookUrl),
-    sheetConfigured: env.googleProspectsSheetIds.length > 0,
+    sheetConfigured: getConfiguredSpreadsheetIds(sheetSources).length > 0,
     lastSheetSyncAt,
   });
 };
@@ -381,6 +411,62 @@ export const registerCallingRoutes = (app: import("fastify").FastifyInstance) =>
   );
 
   app.post(
+    "/calling/sheets",
+    { preHandler: [authenticateRequest] },
+    async (request, reply) => {
+      const currentUser = request.user;
+
+      if (!currentUser) {
+        return reply.unauthorized("Missing authenticated user");
+      }
+
+      const input = createCallingSheetSourceInputSchema.parse(request.body);
+      const spreadsheetId = extractGoogleSpreadsheetId(input.urlOrId);
+
+      if (!isGoogleSpreadsheetId(spreadsheetId)) {
+        return reply.badRequest("Enter a valid Google Sheets URL or document ID.");
+      }
+
+      const existing = (await storage.listCallingSheetSources()).find(
+        (source) => source.spreadsheet_id === spreadsheetId,
+      );
+
+      if (existing) {
+        return toCallingSheetSource(existing);
+      }
+
+      const now = new Date().toISOString();
+      const row: DbCallingSheetSourceRow = {
+        id: nanoid(),
+        spreadsheet_id: spreadsheetId,
+        label: input.label?.trim() || `Sheet ${spreadsheetId.slice(0, 8)}`,
+        created_by_user_id: currentUser.id,
+        created_at: now,
+        updated_at: now,
+      };
+
+      await storage.insertCallingSheetSource(row);
+
+      return toCallingSheetSource(row);
+    },
+  );
+
+  app.delete(
+    "/calling/sheets/:id",
+    { preHandler: [authenticateRequest] },
+    async (request, reply) => {
+      const { id } = z.object({ id: z.string().min(1) }).parse(request.params);
+      const deleted = await storage.deleteCallingSheetSource(id);
+
+      if (!deleted) {
+        return reply.notFound("Sheet source not found.");
+      }
+
+      return reply.status(204).send();
+    },
+  );
+
+  app.post(
     "/calling/sync",
     { preHandler: [authenticateRequest] },
     async (request, reply) => {
@@ -390,13 +476,16 @@ export const registerCallingRoutes = (app: import("fastify").FastifyInstance) =>
         return reply.unauthorized("Missing authenticated user");
       }
 
-      if (!env.googleProspectsSheetIds.length) {
+      const sheetSources = await storage.listCallingSheetSources();
+      const spreadsheetIds = getConfiguredSpreadsheetIds(sheetSources);
+
+      if (!spreadsheetIds.length) {
         return reply.serviceUnavailable(
           "Google prospects sheet is not configured.",
         );
       }
 
-      const prospects = await fetchGoogleSheetProspects();
+      const prospects = await fetchGoogleSheetProspects(spreadsheetIds);
       const now = new Date().toISOString();
       const result = await storage.upsertCallingProspects(
         prospects.map((prospect) => ({

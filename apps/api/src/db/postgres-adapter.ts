@@ -10,6 +10,7 @@ import type {
   DbCallingBatchRow,
   DbCallingCallRow,
   DbCallingProspectRow,
+  DbCallingSheetSourceRow,
   DbLoftBookingRow,
   DbMeetingRequestRow,
   DbMeetingRow,
@@ -44,6 +45,7 @@ const loftAccessTable = `${schemaName}.loft_access`;
 const callingProspectsTable = `${schemaName}.calling_prospects`;
 const callingBatchesTable = `${schemaName}.calling_batches`;
 const callingCallsTable = `${schemaName}.calling_calls`;
+const callingSheetSourcesTable = `${schemaName}.calling_sheet_sources`;
 
 const schemaSql = `
   CREATE SCHEMA IF NOT EXISTS ${schemaName};
@@ -295,6 +297,18 @@ const schemaSql = `
 
   CREATE INDEX IF NOT EXISTS idx_calling_calls_status
     ON ${callingCallsTable}(status, updated_at DESC);
+
+  CREATE TABLE IF NOT EXISTS ${callingSheetSourcesTable} (
+    id TEXT PRIMARY KEY,
+    spreadsheet_id TEXT NOT NULL UNIQUE,
+    label TEXT NOT NULL,
+    created_by_user_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_calling_sheet_sources_created
+    ON ${callingSheetSourcesTable}(created_at DESC);
 
   -- Migrations for existing databases (idempotent).
   -- Allow multiple accounts per platform: drop the legacy UNIQUE(platform).
@@ -1502,6 +1516,44 @@ export const createPostgresAdapter = (): StorageAdapter => {
         `SELECT * FROM ${callingCallsTable} WHERE id = $1 LIMIT 1`,
         [callId],
       );
+    },
+
+    async listCallingSheetSources() {
+      return queryRows<DbCallingSheetSourceRow>(
+        `SELECT * FROM ${callingSheetSourcesTable} ORDER BY created_at DESC, label ASC`,
+      );
+    },
+
+    async insertCallingSheetSource(row) {
+      await execute(
+        `
+          INSERT INTO ${callingSheetSourcesTable} (
+            id,
+            spreadsheet_id,
+            label,
+            created_by_user_id,
+            created_at,
+            updated_at
+          ) VALUES ($1, $2, $3, $4, $5, $6)
+        `,
+        [
+          row.id,
+          row.spreadsheet_id,
+          row.label,
+          row.created_by_user_id,
+          row.created_at,
+          row.updated_at,
+        ],
+      );
+    },
+
+    async deleteCallingSheetSource(id) {
+      const result = await execute(
+        `DELETE FROM ${callingSheetSourcesTable} WHERE id = $1`,
+        [id],
+      );
+
+      return (result.rowCount ?? 0) > 0;
     },
 
     async getLastCallingSheetSyncAt() {

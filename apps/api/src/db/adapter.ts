@@ -7,6 +7,7 @@ import type {
   DbCallingBatchRow,
   DbCallingCallRow,
   DbCallingProspectRow,
+  DbCallingSheetSourceRow,
   DbCallingBatchStatus,
   DbCallingCallStatus,
   DbCallingProspectStatus,
@@ -170,6 +171,9 @@ export interface StorageAdapter {
     callId: string,
     patch: CallingCallStatusPatch,
   ): Promise<DbCallingCallRow | null>;
+  listCallingSheetSources(): Promise<DbCallingSheetSourceRow[]>;
+  insertCallingSheetSource(row: DbCallingSheetSourceRow): Promise<void>;
+  deleteCallingSheetSource(id: string): Promise<boolean>;
   getLastCallingSheetSyncAt(): Promise<string | null>;
   insertScheduledSocialPosts(rows: DbScheduledSocialPostRow[]): Promise<void>;
   listScheduledSocialPosts(): Promise<DbScheduledSocialPostWithCreatorRow[]>;

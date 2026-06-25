@@ -195,8 +195,12 @@ export const parseProspectsFromValues = (
     .filter((prospect): prospect is SheetProspect => Boolean(prospect));
 };
 
-export const fetchGoogleSheetProspects = async (): Promise<SheetProspect[]> => {
-  if (!env.googleProspectsSheetIds.length) {
+export const fetchGoogleSheetProspects = async (
+  spreadsheetIds = env.googleProspectsSheetIds,
+): Promise<SheetProspect[]> => {
+  const uniqueSpreadsheetIds = [...new Set(spreadsheetIds)];
+
+  if (!uniqueSpreadsheetIds.length) {
     throw new Error("No Google prospects sheets are configured");
   }
 
@@ -205,7 +209,7 @@ export const fetchGoogleSheetProspects = async (): Promise<SheetProspect[]> => {
   ]);
   const sheets = google.sheets({ version: "v4", auth });
   const results = await Promise.all(
-    env.googleProspectsSheetIds.map(async (spreadsheetId) => {
+    uniqueSpreadsheetIds.map(async (spreadsheetId) => {
       const ranges = await resolveProspectRanges(sheets, spreadsheetId);
       const response = await sheets.spreadsheets.values.batchGet({
         spreadsheetId,
