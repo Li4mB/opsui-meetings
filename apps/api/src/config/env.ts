@@ -20,9 +20,14 @@ const parseBoolean = (value: string | undefined, fallback: boolean) => {
 
 const parseList = (value: string | undefined) =>
   (value ?? "")
-    .split(",")
+    .split(/[,\n]+/)
     .map((item) => item.trim())
     .filter(Boolean);
+
+const extractGoogleSpreadsheetId = (value: string) => {
+  const match = value.match(/\/spreadsheets\/d\/([a-zA-Z0-9_-]+)/);
+  return (match?.[1] ?? value).trim();
+};
 
 const normalizeDbProvider = (value: string | undefined) => {
   const normalized = value?.trim().toLowerCase();
@@ -79,8 +84,21 @@ const defaultSqliteDbPath = isRender
   : path.resolve(appRoot, "data", "opsui-meetings.sqlite");
 
 const dbPath = process.env.OPSUI_DB_PATH?.trim() || defaultSqliteDbPath;
-const defaultGoogleProspectsSheetId =
-  "1HMtryS36Lr2od_aYN21HGGbQf0osBaixyY3gNx2Zodc";
+const defaultGoogleProspectsSheetIds = [
+  "1HMtryS36Lr2od_aYN21HGGbQf0osBaixyY3gNx2Zodc",
+];
+
+const googleProspectsSheetIds = [
+  ...parseList(process.env.OPSUI_GOOGLE_PROSPECTS_SHEET_IDS),
+  ...parseList(process.env.OPSUI_GOOGLE_PROSPECTS_SHEET_ID),
+].map(extractGoogleSpreadsheetId);
+const resolvedGoogleProspectsSheetIds = [
+  ...new Set(
+    googleProspectsSheetIds.length
+      ? googleProspectsSheetIds
+      : defaultGoogleProspectsSheetIds,
+  ),
+];
 
 if (
   isRender &&
@@ -117,9 +135,8 @@ export const env = {
     process.env.OPSUI_MAKE_MEETING_REQUEST_WEBHOOK_URL ?? "",
   callingWebhookUrl: process.env.OPSUI_CALLING_WEBHOOK_URL ?? "",
   callingWebhookSecret: process.env.OPSUI_CALLING_WEBHOOK_SECRET ?? "",
-  googleProspectsSheetId:
-    process.env.OPSUI_GOOGLE_PROSPECTS_SHEET_ID?.trim() ||
-    defaultGoogleProspectsSheetId,
+  googleProspectsSheetId: resolvedGoogleProspectsSheetIds[0] ?? "",
+  googleProspectsSheetIds: resolvedGoogleProspectsSheetIds,
   googleProspectsSheetRange:
     process.env.OPSUI_GOOGLE_PROSPECTS_SHEET_RANGE ?? "",
   googleProspectsSheetRanges: parseList(

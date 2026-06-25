@@ -87,7 +87,7 @@ const getCallingWorkspace = async () => {
     batches: batches.map(toCallingBatch),
     calls: calls.map(toCallingCall),
     webhookConfigured: Boolean(env.callingWebhookUrl),
-    sheetConfigured: Boolean(env.googleProspectsSheetId),
+    sheetConfigured: env.googleProspectsSheetIds.length > 0,
     lastSheetSyncAt,
   });
 };
@@ -390,7 +390,7 @@ export const registerCallingRoutes = (app: import("fastify").FastifyInstance) =>
         return reply.unauthorized("Missing authenticated user");
       }
 
-      if (!env.googleProspectsSheetId) {
+      if (!env.googleProspectsSheetIds.length) {
         return reply.serviceUnavailable(
           "Google prospects sheet is not configured.",
         );

@@ -11,6 +11,7 @@ import path from "node:path";
 import os from "node:os";
 import { env } from "../config/env.js";
 import { createSqliteAdapter } from "../db/sqlite-adapter.js";
+import { parseProspectsFromValues } from "../modules/google-sheets-prospects.js";
 import type { StorageAdapter } from "../db/adapter.js";
 import type {
   CalendarMeeting,
@@ -572,5 +573,53 @@ describe("9. Auto-post slots + per-account history", () => {
     const editedPublished = await adapter.updateScheduledSocialPostCaption(published, "hacked");
     assert.equal(editedPublished, null);
     assert.equal((await adapter.findScheduledSocialPostById(published))!.caption, "locked");
+  });
+});
+
+// ========== 10. Google Sheets prospect import ==========
+describe("10. Google Sheets prospect import", () => {
+  it("parses map-export business rows with title and phone headers", () => {
+    const prospects = parseProspectsFromValues(
+      [
+        [
+          "title",
+          "totalScore",
+          "reviewsCount",
+          "street",
+          "city",
+          "state",
+          "countryCode",
+          "website",
+          "phone",
+          "categories/0",
+          "url",
+          "categoryName",
+        ],
+        [
+          "PARTMASTER",
+          "4.4",
+          "34",
+          "135 Great N Rd",
+          "Auckland",
+          "",
+          "NZ",
+          "http://partmaster.kiwi/",
+          "+64 9 309 0799",
+          "Auto parts store",
+          "https://www.google.com/maps/place/partmaster",
+          "Auto parts store",
+        ],
+      ],
+      "'Auckland'!A:Z",
+      "sheet-1",
+    );
+
+    assert.equal(prospects.length, 1);
+    assert.equal(prospects[0].name, "PARTMASTER");
+    assert.equal(prospects[0].companyName, "PARTMASTER");
+    assert.equal(prospects[0].phone, "+64 9 309 0799");
+    assert.ok(prospects[0].externalId.includes("https://www.google.com/maps/place/partmaster"));
+    assert.ok(prospects[0].notes.includes("Website: http://partmaster.kiwi/"));
+    assert.ok(prospects[0].notes.includes("Rating: 4.4 (34 reviews)"));
   });
 });
