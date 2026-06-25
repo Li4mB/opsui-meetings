@@ -79,6 +79,8 @@ const defaultSqliteDbPath = isRender
   : path.resolve(appRoot, "data", "opsui-meetings.sqlite");
 
 const dbPath = process.env.OPSUI_DB_PATH?.trim() || defaultSqliteDbPath;
+const defaultGoogleProspectsSheetId =
+  "1HMtryS36Lr2od_aYN21HGGbQf0osBaixyY3gNx2Zodc";
 
 if (
   isRender &&
@@ -115,7 +117,9 @@ export const env = {
     process.env.OPSUI_MAKE_MEETING_REQUEST_WEBHOOK_URL ?? "",
   callingWebhookUrl: process.env.OPSUI_CALLING_WEBHOOK_URL ?? "",
   callingWebhookSecret: process.env.OPSUI_CALLING_WEBHOOK_SECRET ?? "",
-  googleProspectsSheetId: process.env.OPSUI_GOOGLE_PROSPECTS_SHEET_ID ?? "",
+  googleProspectsSheetId:
+    process.env.OPSUI_GOOGLE_PROSPECTS_SHEET_ID?.trim() ||
+    defaultGoogleProspectsSheetId,
   googleProspectsSheetRange:
     process.env.OPSUI_GOOGLE_PROSPECTS_SHEET_RANGE ?? "",
   googleProspectsSheetRanges: parseList(
