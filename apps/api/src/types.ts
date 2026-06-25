@@ -123,6 +123,73 @@ export type DbLoftBookingRow = {
   created_at: string;
 };
 
+export type DbCallingProspectStatus =
+  | "new"
+  | "queued"
+  | "calling"
+  | "completed"
+  | "failed"
+  | "do_not_call";
+
+export type DbCallingBatchStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export type DbCallingCallStatus =
+  | "queued"
+  | "calling"
+  | "completed"
+  | "failed"
+  | "skipped"
+  | "cancelled";
+
+export type DbCallingProspectRow = {
+  id: string;
+  name: string;
+  phone: string;
+  company_name: string;
+  email: string | null;
+  notes: string;
+  source: "manual" | "google_sheet";
+  external_id: string | null;
+  status: DbCallingProspectStatus;
+  last_call_at: string | null;
+  last_call_outcome: string | null;
+  created_by_user_id: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type DbCallingBatchRow = {
+  id: string;
+  status: DbCallingBatchStatus;
+  total_count: number;
+  created_by_user_id: string;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+};
+
+export type DbCallingCallRow = {
+  id: string;
+  batch_id: string;
+  prospect_id: string;
+  sequence_index: number;
+  status: DbCallingCallStatus;
+  outcome: string | null;
+  notes: string;
+  duration_seconds: number | null;
+  external_call_id: string | null;
+  status_message: string | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+  updated_at: string;
+};
+
 export type DbScheduledSocialPostStatus =
   | "scheduled"
   | "publishing"

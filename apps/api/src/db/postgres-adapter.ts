@@ -7,6 +7,9 @@ import type {
   DbAiPostCaptionGenerationRow,
   DbAiPostImageGenerationRow,
   DbAutoPostAgentConfigRow,
+  DbCallingBatchRow,
+  DbCallingCallRow,
+  DbCallingProspectRow,
   DbLoftBookingRow,
   DbMeetingRequestRow,
   DbMeetingRow,
@@ -20,6 +23,7 @@ import type {
   DbScheduledSocialPostWithCreatorRow,
   DbSocialAccountWithCreatorRow,
   ReplaceMeetingsResult,
+  UpsertCallingProspectsResult,
   StorageAdapter,
 } from "./adapter.js";
 
@@ -37,6 +41,9 @@ const scheduledSocialPostsTable = `${schemaName}.scheduled_social_posts`;
 const socialAccountsTable = `${schemaName}.social_accounts`;
 const loftBookingsTable = `${schemaName}.loft_bookings`;
 const loftAccessTable = `${schemaName}.loft_access`;
+const callingProspectsTable = `${schemaName}.calling_prospects`;
+const callingBatchesTable = `${schemaName}.calling_batches`;
+const callingCallsTable = `${schemaName}.calling_calls`;
 
 const schemaSql = `
   CREATE SCHEMA IF NOT EXISTS ${schemaName};
@@ -232,6 +239,62 @@ const schemaSql = `
     user_id TEXT PRIMARY KEY,
     granted_at TEXT NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS ${callingProspectsTable} (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    phone TEXT NOT NULL,
+    company_name TEXT NOT NULL,
+    email TEXT,
+    notes TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL CHECK(source IN ('manual', 'google_sheet')) DEFAULT 'manual',
+    external_id TEXT UNIQUE,
+    status TEXT NOT NULL CHECK(status IN ('new', 'queued', 'calling', 'completed', 'failed', 'do_not_call')) DEFAULT 'new',
+    last_call_at TEXT,
+    last_call_outcome TEXT,
+    created_by_user_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_calling_prospects_status
+    ON ${callingProspectsTable}(status, updated_at DESC);
+
+  CREATE TABLE IF NOT EXISTS ${callingBatchesTable} (
+    id TEXT PRIMARY KEY,
+    status TEXT NOT NULL CHECK(status IN ('queued', 'running', 'completed', 'failed', 'cancelled')) DEFAULT 'queued',
+    total_count INTEGER NOT NULL,
+    created_by_user_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    completed_at TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_calling_batches_status
+    ON ${callingBatchesTable}(status, created_at DESC);
+
+  CREATE TABLE IF NOT EXISTS ${callingCallsTable} (
+    id TEXT PRIMARY KEY,
+    batch_id TEXT NOT NULL REFERENCES ${callingBatchesTable}(id) ON DELETE CASCADE,
+    prospect_id TEXT NOT NULL REFERENCES ${callingProspectsTable}(id),
+    sequence_index INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('queued', 'calling', 'completed', 'failed', 'skipped', 'cancelled')) DEFAULT 'queued',
+    outcome TEXT,
+    notes TEXT NOT NULL DEFAULT '',
+    duration_seconds INTEGER,
+    external_call_id TEXT,
+    status_message TEXT,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    completed_at TEXT,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_calling_calls_batch
+    ON ${callingCallsTable}(batch_id, sequence_index);
+
+  CREATE INDEX IF NOT EXISTS idx_calling_calls_status
+    ON ${callingCallsTable}(status, updated_at DESC);
 
   -- Migrations for existing databases (idempotent).
   -- Allow multiple accounts per platform: drop the legacy UNIQUE(platform).
@@ -1033,6 +1096,419 @@ export const createPostgresAdapter = (): StorageAdapter => {
         `,
         [userId, new Date().toISOString()],
       );
+    },
+
+    async listCallingProspects() {
+      return queryRows<DbCallingProspectRow>(
+        `SELECT * FROM ${callingProspectsTable} ORDER BY updated_at DESC, name ASC`,
+      );
+    },
+
+    async findCallingProspectById(id) {
+      return queryRow<DbCallingProspectRow>(
+        `SELECT * FROM ${callingProspectsTable} WHERE id = $1 LIMIT 1`,
+        [id],
+      );
+    },
+
+    async insertCallingProspect(row) {
+      await execute(
+        `
+          INSERT INTO ${callingProspectsTable} (
+            id,
+            name,
+            phone,
+            company_name,
+            email,
+            notes,
+            source,
+            external_id,
+            status,
+            last_call_at,
+            last_call_outcome,
+            created_by_user_id,
+            created_at,
+            updated_at
+          ) VALUES (
+            $1, $2, $3, $4, $5, $6, $7,
+            $8, $9, $10, $11, $12, $13, $14
+          )
+        `,
+        [
+          row.id,
+          row.name,
+          row.phone,
+          row.company_name,
+          row.email,
+          row.notes,
+          row.source,
+          row.external_id,
+          row.status,
+          row.last_call_at,
+          row.last_call_outcome,
+          row.created_by_user_id,
+          row.created_at,
+          row.updated_at,
+        ],
+      );
+    },
+
+    async upsertCallingProspects(rows) {
+      return withTransaction(async (client) => {
+        const syncedAt = new Date().toISOString();
+
+        if (!rows.length) {
+          await execute(
+            `
+              INSERT INTO ${syncStateTable} (key, value) VALUES ('lastCallingSheetSyncAt', $1)
+              ON CONFLICT(key) DO UPDATE SET value = EXCLUDED.value
+            `,
+            [syncedAt],
+            client,
+          );
+
+          return { imported: 0, updated: 0, skipped: 0, syncedAt };
+        }
+
+        const externalIds = rows
+          .map((row) => row.external_id)
+          .filter((externalId): externalId is string => Boolean(externalId));
+        const existingRows = externalIds.length
+          ? await queryRows<{ external_id: string }>(
+              `SELECT external_id FROM ${callingProspectsTable} WHERE external_id = ANY($1)`,
+              [externalIds],
+              client,
+            )
+          : [];
+        const existing = new Set(existingRows.map((row) => row.external_id));
+        let imported = 0;
+        let updated = 0;
+
+        for (const row of rows) {
+          if (row.external_id && existing.has(row.external_id)) {
+            await execute(
+              `
+                UPDATE ${callingProspectsTable}
+                SET
+                  name = $1,
+                  phone = $2,
+                  company_name = $3,
+                  email = $4,
+                  notes = $5,
+                  source = $6,
+                  updated_at = $7
+                WHERE external_id = $8
+              `,
+              [
+                row.name,
+                row.phone,
+                row.company_name,
+                row.email,
+                row.notes,
+                row.source,
+                syncedAt,
+                row.external_id,
+              ],
+              client,
+            );
+            updated += 1;
+            continue;
+          }
+
+          await execute(
+            `
+              INSERT INTO ${callingProspectsTable} (
+                id,
+                name,
+                phone,
+                company_name,
+                email,
+                notes,
+                source,
+                external_id,
+                status,
+                last_call_at,
+                last_call_outcome,
+                created_by_user_id,
+                created_at,
+                updated_at
+              ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7,
+                $8, $9, $10, $11, $12, $13, $14
+              )
+            `,
+            [
+              row.id,
+              row.name,
+              row.phone,
+              row.company_name,
+              row.email,
+              row.notes,
+              row.source,
+              row.external_id,
+              row.status,
+              row.last_call_at,
+              row.last_call_outcome,
+              row.created_by_user_id,
+              row.created_at,
+              row.updated_at,
+            ],
+            client,
+          );
+          imported += 1;
+        }
+
+        await execute(
+          `
+            INSERT INTO ${syncStateTable} (key, value) VALUES ('lastCallingSheetSyncAt', $1)
+            ON CONFLICT(key) DO UPDATE SET value = EXCLUDED.value
+          `,
+          [syncedAt],
+          client,
+        );
+
+        return {
+          imported,
+          updated,
+          skipped: 0,
+          syncedAt,
+        } satisfies UpsertCallingProspectsResult;
+      });
+    },
+
+    async updateCallingProspectStatus(prospectId, patch) {
+      const updatedAt = new Date().toISOString();
+      const result = await execute(
+        `
+          UPDATE ${callingProspectsTable}
+          SET
+            status = $1,
+            last_call_at = COALESCE($2, last_call_at),
+            last_call_outcome = COALESCE($3, last_call_outcome),
+            updated_at = $4
+          WHERE id = $5
+        `,
+        [
+          patch.status,
+          patch.lastCallAt ?? null,
+          patch.lastCallOutcome ?? null,
+          updatedAt,
+          prospectId,
+        ],
+      );
+
+      if (!(result.rowCount ?? 0)) {
+        return null;
+      }
+
+      return queryRow<DbCallingProspectRow>(
+        `SELECT * FROM ${callingProspectsTable} WHERE id = $1 LIMIT 1`,
+        [prospectId],
+      );
+    },
+
+    async listCallingBatches(limit) {
+      return queryRows<DbCallingBatchRow>(
+        `SELECT * FROM ${callingBatchesTable} ORDER BY created_at DESC LIMIT $1`,
+        [limit],
+      );
+    },
+
+    async findCallingBatchById(id) {
+      return queryRow<DbCallingBatchRow>(
+        `SELECT * FROM ${callingBatchesTable} WHERE id = $1 LIMIT 1`,
+        [id],
+      );
+    },
+
+    async insertCallingBatch(batch, calls) {
+      await withTransaction(async (client) => {
+        await execute(
+          `
+            INSERT INTO ${callingBatchesTable} (
+              id,
+              status,
+              total_count,
+              created_by_user_id,
+              created_at,
+              started_at,
+              completed_at
+            ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+          `,
+          [
+            batch.id,
+            batch.status,
+            batch.total_count,
+            batch.created_by_user_id,
+            batch.created_at,
+            batch.started_at,
+            batch.completed_at,
+          ],
+          client,
+        );
+
+        for (const call of calls) {
+          await execute(
+            `
+              INSERT INTO ${callingCallsTable} (
+                id,
+                batch_id,
+                prospect_id,
+                sequence_index,
+                status,
+                outcome,
+                notes,
+                duration_seconds,
+                external_call_id,
+                status_message,
+                created_at,
+                started_at,
+                completed_at,
+                updated_at
+              ) VALUES (
+                $1, $2, $3, $4, $5, $6, $7,
+                $8, $9, $10, $11, $12, $13, $14
+              )
+            `,
+            [
+              call.id,
+              call.batch_id,
+              call.prospect_id,
+              call.sequence_index,
+              call.status,
+              call.outcome,
+              call.notes,
+              call.duration_seconds,
+              call.external_call_id,
+              call.status_message,
+              call.created_at,
+              call.started_at,
+              call.completed_at,
+              call.updated_at,
+            ],
+            client,
+          );
+          await execute(
+            `
+              UPDATE ${callingProspectsTable}
+              SET status = 'queued', updated_at = $1
+              WHERE id = $2 AND status != 'do_not_call'
+            `,
+            [batch.created_at, call.prospect_id],
+            client,
+          );
+        }
+      });
+    },
+
+    async updateCallingBatchStatus(batchId, patch) {
+      const result = await execute(
+        `
+          UPDATE ${callingBatchesTable}
+          SET
+            status = $1,
+            started_at = COALESCE(started_at, $2),
+            completed_at = COALESCE($3, completed_at)
+          WHERE id = $4
+        `,
+        [
+          patch.status,
+          patch.startedAt ?? null,
+          patch.completedAt ?? null,
+          batchId,
+        ],
+      );
+
+      if (!(result.rowCount ?? 0)) {
+        return null;
+      }
+
+      return queryRow<DbCallingBatchRow>(
+        `SELECT * FROM ${callingBatchesTable} WHERE id = $1 LIMIT 1`,
+        [batchId],
+      );
+    },
+
+    async listCallingCalls(limit) {
+      return queryRows<DbCallingCallRow>(
+        `SELECT * FROM ${callingCallsTable} ORDER BY created_at DESC, sequence_index ASC LIMIT $1`,
+        [limit],
+      );
+    },
+
+    async listCallingCallsByBatch(batchId) {
+      return queryRows<DbCallingCallRow>(
+        `SELECT * FROM ${callingCallsTable} WHERE batch_id = $1 ORDER BY sequence_index ASC`,
+        [batchId],
+      );
+    },
+
+    async findCallingCallById(id) {
+      return queryRow<DbCallingCallRow>(
+        `SELECT * FROM ${callingCallsTable} WHERE id = $1 LIMIT 1`,
+        [id],
+      );
+    },
+
+    async findNextQueuedCallingCall(batchId) {
+      return queryRow<DbCallingCallRow>(
+        `
+          SELECT *
+          FROM ${callingCallsTable}
+          WHERE batch_id = $1 AND status = 'queued'
+          ORDER BY sequence_index ASC
+          LIMIT 1
+        `,
+        [batchId],
+      );
+    },
+
+    async updateCallingCallStatus(callId, patch) {
+      const updatedAt = new Date().toISOString();
+      const result = await execute(
+        `
+          UPDATE ${callingCallsTable}
+          SET
+            status = $1,
+            outcome = COALESCE($2, outcome),
+            notes = COALESCE($3, notes),
+            duration_seconds = COALESCE($4, duration_seconds),
+            external_call_id = COALESCE($5, external_call_id),
+            status_message = $6,
+            started_at = COALESCE(started_at, $7),
+            completed_at = COALESCE($8, completed_at),
+            updated_at = $9
+          WHERE id = $10
+        `,
+        [
+          patch.status,
+          patch.outcome ?? null,
+          patch.notes ?? null,
+          patch.durationSeconds ?? null,
+          patch.externalCallId ?? null,
+          patch.statusMessage ?? null,
+          patch.startedAt ?? null,
+          patch.completedAt ?? null,
+          updatedAt,
+          callId,
+        ],
+      );
+
+      if (!(result.rowCount ?? 0)) {
+        return null;
+      }
+
+      return queryRow<DbCallingCallRow>(
+        `SELECT * FROM ${callingCallsTable} WHERE id = $1 LIMIT 1`,
+        [callId],
+      );
+    },
+
+    async getLastCallingSheetSyncAt() {
+      const row = await queryRow<{ value: string }>(
+        `SELECT value FROM ${syncStateTable} WHERE key = 'lastCallingSheetSyncAt' LIMIT 1`,
+      );
+      return row?.value ?? null;
     },
 
     async insertScheduledSocialPosts(rows) {

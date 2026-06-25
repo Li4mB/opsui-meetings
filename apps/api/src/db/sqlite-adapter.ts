@@ -10,6 +10,9 @@ import type {
   DbAiPostCaptionGenerationRow,
   DbAiPostImageGenerationRow,
   DbAutoPostAgentConfigRow,
+  DbCallingBatchRow,
+  DbCallingCallRow,
+  DbCallingProspectRow,
   DbLoftBookingRow,
   DbMeetingRequestRow,
   DbMeetingRow,
@@ -23,6 +26,7 @@ import type {
   DbScheduledSocialPostWithCreatorRow,
   DbSocialAccountWithCreatorRow,
   ReplaceMeetingsResult,
+  UpsertCallingProspectsResult,
   StorageAdapter,
 } from "./adapter.js";
 
@@ -231,6 +235,66 @@ const schemaSql = `
     user_id TEXT PRIMARY KEY,
     granted_at TEXT NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS calling_prospects (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    phone TEXT NOT NULL,
+    company_name TEXT NOT NULL,
+    email TEXT,
+    notes TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL CHECK(source IN ('manual', 'google_sheet')) DEFAULT 'manual',
+    external_id TEXT UNIQUE,
+    status TEXT NOT NULL CHECK(status IN ('new', 'queued', 'calling', 'completed', 'failed', 'do_not_call')) DEFAULT 'new',
+    last_call_at TEXT,
+    last_call_outcome TEXT,
+    created_by_user_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (created_by_user_id) REFERENCES users(id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_calling_prospects_status
+    ON calling_prospects(status, updated_at DESC);
+
+  CREATE TABLE IF NOT EXISTS calling_batches (
+    id TEXT PRIMARY KEY,
+    status TEXT NOT NULL CHECK(status IN ('queued', 'running', 'completed', 'failed', 'cancelled')) DEFAULT 'queued',
+    total_count INTEGER NOT NULL,
+    created_by_user_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    completed_at TEXT,
+    FOREIGN KEY (created_by_user_id) REFERENCES users(id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_calling_batches_status
+    ON calling_batches(status, created_at DESC);
+
+  CREATE TABLE IF NOT EXISTS calling_calls (
+    id TEXT PRIMARY KEY,
+    batch_id TEXT NOT NULL,
+    prospect_id TEXT NOT NULL,
+    sequence_index INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK(status IN ('queued', 'calling', 'completed', 'failed', 'skipped', 'cancelled')) DEFAULT 'queued',
+    outcome TEXT,
+    notes TEXT NOT NULL DEFAULT '',
+    duration_seconds INTEGER,
+    external_call_id TEXT,
+    status_message TEXT,
+    created_at TEXT NOT NULL,
+    started_at TEXT,
+    completed_at TEXT,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (batch_id) REFERENCES calling_batches(id) ON DELETE CASCADE,
+    FOREIGN KEY (prospect_id) REFERENCES calling_prospects(id)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_calling_calls_batch
+    ON calling_calls(batch_id, sequence_index);
+
+  CREATE INDEX IF NOT EXISTS idx_calling_calls_status
+    ON calling_calls(status, updated_at DESC);
 `;
 
 const selectActiveMeetingsQuery = `
@@ -1106,6 +1170,426 @@ export const createSqliteAdapter = (): StorageAdapter => {
            ON CONFLICT (user_id) DO NOTHING`,
         )
         .run(userId, new Date().toISOString());
+    },
+
+    async listCallingProspects() {
+      const database = getDb();
+      return database
+        .prepare<unknown[], DbCallingProspectRow>(
+          "SELECT * FROM calling_prospects ORDER BY updated_at DESC, name ASC",
+        )
+        .all();
+    },
+
+    async findCallingProspectById(id) {
+      const database = getDb();
+      return (
+        database
+          .prepare<unknown[], DbCallingProspectRow>(
+            "SELECT * FROM calling_prospects WHERE id = ? LIMIT 1",
+          )
+          .get(id) ?? null
+      );
+    },
+
+    async insertCallingProspect(row) {
+      const database = getDb();
+      database.prepare(`
+        INSERT INTO calling_prospects (
+          id,
+          name,
+          phone,
+          company_name,
+          email,
+          notes,
+          source,
+          external_id,
+          status,
+          last_call_at,
+          last_call_outcome,
+          created_by_user_id,
+          created_at,
+          updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        row.id,
+        row.name,
+        row.phone,
+        row.company_name,
+        row.email,
+        row.notes,
+        row.source,
+        row.external_id,
+        row.status,
+        row.last_call_at,
+        row.last_call_outcome,
+        row.created_by_user_id,
+        row.created_at,
+        row.updated_at,
+      );
+    },
+
+    async upsertCallingProspects(rows) {
+      const database = getDb();
+      const transaction = database.transaction(
+        (incomingRows: DbCallingProspectRow[]): UpsertCallingProspectsResult => {
+          const syncedAt = new Date().toISOString();
+
+          if (!incomingRows.length) {
+            database.prepare(`
+              INSERT INTO sync_state (key, value) VALUES ('lastCallingSheetSyncAt', ?)
+              ON CONFLICT(key) DO UPDATE SET value = excluded.value
+            `).run(syncedAt);
+
+            return { imported: 0, updated: 0, skipped: 0, syncedAt };
+          }
+
+          const externalIds = incomingRows
+            .map((row) => row.external_id)
+            .filter((externalId): externalId is string => Boolean(externalId));
+          const placeholders = externalIds.map(() => "?").join(", ");
+          const existing = placeholders
+            ? new Set(
+                database
+                  .prepare<unknown[], { external_id: string }>(
+                    `SELECT external_id FROM calling_prospects WHERE external_id IN (${placeholders})`,
+                  )
+                  .all(...externalIds)
+                  .map((row) => row.external_id),
+              )
+            : new Set<string>();
+
+          const insert = database.prepare(`
+            INSERT INTO calling_prospects (
+              id,
+              name,
+              phone,
+              company_name,
+              email,
+              notes,
+              source,
+              external_id,
+              status,
+              last_call_at,
+              last_call_outcome,
+              created_by_user_id,
+              created_at,
+              updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `);
+          const update = database.prepare(`
+            UPDATE calling_prospects
+            SET
+              name = ?,
+              phone = ?,
+              company_name = ?,
+              email = ?,
+              notes = ?,
+              source = ?,
+              updated_at = ?
+            WHERE external_id = ?
+          `);
+
+          let imported = 0;
+          let updated = 0;
+
+          for (const row of incomingRows) {
+            if (row.external_id && existing.has(row.external_id)) {
+              update.run(
+                row.name,
+                row.phone,
+                row.company_name,
+                row.email,
+                row.notes,
+                row.source,
+                syncedAt,
+                row.external_id,
+              );
+              updated += 1;
+              continue;
+            }
+
+            insert.run(
+              row.id,
+              row.name,
+              row.phone,
+              row.company_name,
+              row.email,
+              row.notes,
+              row.source,
+              row.external_id,
+              row.status,
+              row.last_call_at,
+              row.last_call_outcome,
+              row.created_by_user_id,
+              row.created_at,
+              row.updated_at,
+            );
+            imported += 1;
+          }
+
+          database.prepare(`
+            INSERT INTO sync_state (key, value) VALUES ('lastCallingSheetSyncAt', ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+          `).run(syncedAt);
+
+          return { imported, updated, skipped: 0, syncedAt };
+        },
+      );
+
+      return transaction(rows);
+    },
+
+    async updateCallingProspectStatus(prospectId, patch) {
+      const database = getDb();
+      const updatedAt = new Date().toISOString();
+      const result = database.prepare(`
+        UPDATE calling_prospects
+        SET
+          status = ?,
+          last_call_at = COALESCE(?, last_call_at),
+          last_call_outcome = COALESCE(?, last_call_outcome),
+          updated_at = ?
+        WHERE id = ?
+      `).run(
+        patch.status,
+        patch.lastCallAt ?? null,
+        patch.lastCallOutcome ?? null,
+        updatedAt,
+        prospectId,
+      );
+
+      if (!result.changes) {
+        return null;
+      }
+
+      return (
+        database
+          .prepare<unknown[], DbCallingProspectRow>(
+            "SELECT * FROM calling_prospects WHERE id = ? LIMIT 1",
+          )
+          .get(prospectId) ?? null
+      );
+    },
+
+    async listCallingBatches(limit) {
+      const database = getDb();
+      return database
+        .prepare<unknown[], DbCallingBatchRow>(
+          "SELECT * FROM calling_batches ORDER BY created_at DESC LIMIT ?",
+        )
+        .all(limit);
+    },
+
+    async findCallingBatchById(id) {
+      const database = getDb();
+      return (
+        database
+          .prepare<unknown[], DbCallingBatchRow>(
+            "SELECT * FROM calling_batches WHERE id = ? LIMIT 1",
+          )
+          .get(id) ?? null
+      );
+    },
+
+    async insertCallingBatch(batch, calls) {
+      const database = getDb();
+      const transaction = database.transaction(
+        (incomingBatch: DbCallingBatchRow, incomingCalls: DbCallingCallRow[]) => {
+          database.prepare(`
+            INSERT INTO calling_batches (
+              id,
+              status,
+              total_count,
+              created_by_user_id,
+              created_at,
+              started_at,
+              completed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+          `).run(
+            incomingBatch.id,
+            incomingBatch.status,
+            incomingBatch.total_count,
+            incomingBatch.created_by_user_id,
+            incomingBatch.created_at,
+            incomingBatch.started_at,
+            incomingBatch.completed_at,
+          );
+
+          const insertCall = database.prepare(`
+            INSERT INTO calling_calls (
+              id,
+              batch_id,
+              prospect_id,
+              sequence_index,
+              status,
+              outcome,
+              notes,
+              duration_seconds,
+              external_call_id,
+              status_message,
+              created_at,
+              started_at,
+              completed_at,
+              updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `);
+          const markQueued = database.prepare(`
+            UPDATE calling_prospects
+            SET status = 'queued', updated_at = ?
+            WHERE id = ? AND status != 'do_not_call'
+          `);
+
+          for (const call of incomingCalls) {
+            insertCall.run(
+              call.id,
+              call.batch_id,
+              call.prospect_id,
+              call.sequence_index,
+              call.status,
+              call.outcome,
+              call.notes,
+              call.duration_seconds,
+              call.external_call_id,
+              call.status_message,
+              call.created_at,
+              call.started_at,
+              call.completed_at,
+              call.updated_at,
+            );
+            markQueued.run(incomingBatch.created_at, call.prospect_id);
+          }
+        },
+      );
+
+      transaction(batch, calls);
+    },
+
+    async updateCallingBatchStatus(batchId, patch) {
+      const database = getDb();
+      const result = database.prepare(`
+        UPDATE calling_batches
+        SET
+          status = ?,
+          started_at = COALESCE(started_at, ?),
+          completed_at = COALESCE(?, completed_at)
+        WHERE id = ?
+      `).run(
+        patch.status,
+        patch.startedAt ?? null,
+        patch.completedAt ?? null,
+        batchId,
+      );
+
+      if (!result.changes) {
+        return null;
+      }
+
+      return (
+        database
+          .prepare<unknown[], DbCallingBatchRow>(
+            "SELECT * FROM calling_batches WHERE id = ? LIMIT 1",
+          )
+          .get(batchId) ?? null
+      );
+    },
+
+    async listCallingCalls(limit) {
+      const database = getDb();
+      return database
+        .prepare<unknown[], DbCallingCallRow>(
+          "SELECT * FROM calling_calls ORDER BY created_at DESC, sequence_index ASC LIMIT ?",
+        )
+        .all(limit);
+    },
+
+    async listCallingCallsByBatch(batchId) {
+      const database = getDb();
+      return database
+        .prepare<unknown[], DbCallingCallRow>(
+          "SELECT * FROM calling_calls WHERE batch_id = ? ORDER BY sequence_index ASC",
+        )
+        .all(batchId);
+    },
+
+    async findCallingCallById(id) {
+      const database = getDb();
+      return (
+        database
+          .prepare<unknown[], DbCallingCallRow>(
+            "SELECT * FROM calling_calls WHERE id = ? LIMIT 1",
+          )
+          .get(id) ?? null
+      );
+    },
+
+    async findNextQueuedCallingCall(batchId) {
+      const database = getDb();
+      return (
+        database
+          .prepare<unknown[], DbCallingCallRow>(
+            `SELECT * FROM calling_calls
+             WHERE batch_id = ? AND status = 'queued'
+             ORDER BY sequence_index ASC
+             LIMIT 1`,
+          )
+          .get(batchId) ?? null
+      );
+    },
+
+    async updateCallingCallStatus(callId, patch) {
+      const database = getDb();
+      const updatedAt = new Date().toISOString();
+      const result = database.prepare(`
+        UPDATE calling_calls
+        SET
+          status = ?,
+          outcome = COALESCE(?, outcome),
+          notes = COALESCE(?, notes),
+          duration_seconds = COALESCE(?, duration_seconds),
+          external_call_id = COALESCE(?, external_call_id),
+          status_message = ?,
+          started_at = COALESCE(started_at, ?),
+          completed_at = COALESCE(?, completed_at),
+          updated_at = ?
+        WHERE id = ?
+      `).run(
+        patch.status,
+        patch.outcome ?? null,
+        patch.notes ?? null,
+        patch.durationSeconds ?? null,
+        patch.externalCallId ?? null,
+        patch.statusMessage ?? null,
+        patch.startedAt ?? null,
+        patch.completedAt ?? null,
+        updatedAt,
+        callId,
+      );
+
+      if (!result.changes) {
+        return null;
+      }
+
+      return (
+        database
+          .prepare<unknown[], DbCallingCallRow>(
+            "SELECT * FROM calling_calls WHERE id = ? LIMIT 1",
+          )
+          .get(callId) ?? null
+      );
+    },
+
+    async getLastCallingSheetSyncAt() {
+      const database = getDb();
+      return (
+        (
+          database
+            .prepare<[], { value?: string }>(
+              "SELECT value FROM sync_state WHERE key = 'lastCallingSheetSyncAt' LIMIT 1",
+            )
+            .get() as { value?: string } | undefined
+        )?.value ?? null
+      );
     },
 
     async insertScheduledSocialPosts(rows) {

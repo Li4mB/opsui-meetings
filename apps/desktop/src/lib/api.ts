@@ -14,6 +14,10 @@ import {
   aiPostChatResponseSchema,
   autoPostAgentConfigResponseSchema,
   bulkReviewSocialPostsInputSchema,
+  callingBatchStartResponseSchema,
+  callingProspectSchema,
+  callingProspectsSyncResponseSchema,
+  callingWorkspaceResponseSchema,
   duplicateScheduledPostInputSchema,
   editScheduledPostCaptionInputSchema,
   reviewSocialPostInputSchema,
@@ -42,6 +46,8 @@ import {
   syncResponseSchema,
   updateUserInputSchema,
   userSchema,
+  createCallingBatchInputSchema,
+  createCallingProspectInputSchema,
 } from "@opsui/shared";
 
 const DEFAULT_API_BASE_URL = import.meta.env.DEV
@@ -189,6 +195,66 @@ export const getPastMeetings = (token: string) =>
       headers: withToken(token),
     },
     meetingsResponseSchema,
+  );
+
+export const getCallingWorkspace = (token: string) =>
+  request(
+    "/calling",
+    {
+      method: "GET",
+      headers: withToken(token),
+    },
+    callingWorkspaceResponseSchema,
+  );
+
+export const createCallingProspect = (
+  token: string,
+  input: z.infer<typeof createCallingProspectInputSchema>,
+) =>
+  request(
+    "/calling/prospects",
+    {
+      method: "POST",
+      headers: withToken(token),
+      body: JSON.stringify(createCallingProspectInputSchema.parse(input)),
+    },
+    callingProspectSchema,
+  );
+
+export const syncCallingProspects = (token: string) =>
+  request(
+    "/calling/sync",
+    {
+      method: "POST",
+      headers: withToken(token),
+      body: JSON.stringify({}),
+    },
+    callingProspectsSyncResponseSchema,
+  );
+
+export const createCallingBatch = (
+  token: string,
+  input: z.infer<typeof createCallingBatchInputSchema>,
+) =>
+  request(
+    "/calling/batches",
+    {
+      method: "POST",
+      headers: withToken(token),
+      body: JSON.stringify(createCallingBatchInputSchema.parse(input)),
+    },
+    callingBatchStartResponseSchema,
+  );
+
+export const startNextCallingBatchCall = (token: string, batchId: string) =>
+  request(
+    `/calling/batches/${encodeURIComponent(batchId)}/start-next`,
+    {
+      method: "POST",
+      headers: withToken(token),
+      body: JSON.stringify({}),
+    },
+    callingBatchStartResponseSchema,
   );
 
 export const syncMeetings = (token: string) =>

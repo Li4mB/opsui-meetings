@@ -22,6 +22,7 @@ import type {
 } from "../store/app-store";
 import opsLogo from "../assets/op.png";
 import { AdminPanel } from "./AdminPanel";
+import { CallingPanel } from "./CallingPanel";
 import { CreateMeetingPanel } from "./CreateMeetingPanel";
 import { CurrentMeetingPanel } from "./CurrentMeetingPanel";
 import { MeetingCalendar } from "./MeetingCalendar";
@@ -287,6 +288,13 @@ export const AppShell = ({
               Create Meeting
             </button>
             <button
+              className={`app-nav__item ${activeSurfaceMode === "calling" ? "app-nav__item--active" : ""}`}
+              onClick={() => onSetSurfaceMode("calling")}
+              type="button"
+            >
+              Calling
+            </button>
+            <button
               className={`app-nav__item ${activeSurfaceMode === "post" ? "app-nav__item--active" : ""}`}
               onClick={() => onSetSurfaceMode("post")}
               type="button"
@@ -451,6 +459,27 @@ export const AppShell = ({
                   <div>Select every module they mention.</div>
                   <div>Save the request once the preferred date and time are confirmed.</div>
                   {syncMessage ? <div>{syncMessage}</div> : null}
+                </div>
+              </section>
+            </>
+          ) : activeSurfaceMode === "calling" ? (
+            <>
+              <section className="sidebar-panel">
+                <div className="sidebar-section__label">Calling workspace</div>
+                <div className="sidebar-panel__title">Prospect queue</div>
+                <div className="sidebar-meta">
+                  <div>Use selected prospects to start one Make-backed call batch.</div>
+                  <div>Make confirms each ended call before the next one starts.</div>
+                  <div>{syncMessage ?? "Manual prospects work before the sheet is linked."}</div>
+                </div>
+              </section>
+
+              <section className="sidebar-panel">
+                <div className="sidebar-section__label">Required fields</div>
+                <div className="sidebar-meta">
+                  <div>Phone number</div>
+                  <div>Name</div>
+                  <div>Company name</div>
                 </div>
               </section>
             </>
@@ -749,6 +778,8 @@ export const AppShell = ({
               isSubmitting={syncStatus === "syncing"}
               onSubmit={onCreateMeetingRequest}
             />
+          ) : activeSurfaceMode === "calling" ? (
+            <CallingPanel authToken={session.token} />
           ) : activeSurfaceMode === "post" ? null : activeSurfaceMode === "current" ? (
             <CurrentMeetingPanel
               meeting={currentMeeting}

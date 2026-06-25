@@ -2,7 +2,15 @@ import type { Country, LoftBooking, Meeting, Session, User } from "@opsui/shared
 import { create } from "zustand";
 
 export type ViewMode = "list" | "calendar";
-export type SurfaceMode = "meetings" | "past" | "current" | "create" | "post" | "admin" | "loft";
+export type SurfaceMode =
+  | "meetings"
+  | "past"
+  | "current"
+  | "create"
+  | "calling"
+  | "post"
+  | "admin"
+  | "loft";
 export type CurrentMeetingMode = "embedded" | "window";
 export type CountryFilter = "All" | Country;
 

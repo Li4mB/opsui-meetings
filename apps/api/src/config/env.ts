@@ -18,6 +18,12 @@ const parseBoolean = (value: string | undefined, fallback: boolean) => {
   return value.toLowerCase() === "true";
 };
 
+const parseList = (value: string | undefined) =>
+  (value ?? "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+
 const normalizeDbProvider = (value: string | undefined) => {
   const normalized = value?.trim().toLowerCase();
 
@@ -107,6 +113,15 @@ export const env = {
   openAiVectorStoreId: process.env.OPSUI_OPENAI_VECTOR_STORE_ID ?? "",
   makeMeetingRequestWebhookUrl:
     process.env.OPSUI_MAKE_MEETING_REQUEST_WEBHOOK_URL ?? "",
+  callingWebhookUrl: process.env.OPSUI_CALLING_WEBHOOK_URL ?? "",
+  callingWebhookSecret: process.env.OPSUI_CALLING_WEBHOOK_SECRET ?? "",
+  googleProspectsSheetId: process.env.OPSUI_GOOGLE_PROSPECTS_SHEET_ID ?? "",
+  googleProspectsSheetRange:
+    process.env.OPSUI_GOOGLE_PROSPECTS_SHEET_RANGE ?? "",
+  googleProspectsSheetRanges: parseList(
+    process.env.OPSUI_GOOGLE_PROSPECTS_SHEET_RANGES ??
+      process.env.OPSUI_GOOGLE_PROSPECTS_SHEET_RANGE,
+  ),
   socialPublishWebhookUrl: process.env.OPSUI_SOCIAL_PUBLISH_WEBHOOK_URL ?? "",
   socialPublicApiUrl:
     process.env.OPSUI_PUBLIC_API_URL?.trim() || renderExternalUrl,

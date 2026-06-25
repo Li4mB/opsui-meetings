@@ -4,6 +4,12 @@ import type {
   DbAiPostCaptionGenerationRow,
   DbAiPostImageGenerationRow,
   DbAutoPostAgentConfigRow,
+  DbCallingBatchRow,
+  DbCallingCallRow,
+  DbCallingProspectRow,
+  DbCallingBatchStatus,
+  DbCallingCallStatus,
+  DbCallingProspectStatus,
   DbLoftBookingRow,
   DbMeetingRequestRow,
   DbMeetingRow,
@@ -45,6 +51,36 @@ export type ReplaceMeetingsResult = {
   updated: number;
   removed: number;
   syncedAt: string;
+};
+
+export type UpsertCallingProspectsResult = {
+  imported: number;
+  updated: number;
+  skipped: number;
+  syncedAt: string;
+};
+
+export type CallingCallStatusPatch = {
+  status: DbCallingCallStatus;
+  outcome?: string | null;
+  notes?: string;
+  durationSeconds?: number | null;
+  externalCallId?: string | null;
+  statusMessage?: string | null;
+  startedAt?: string | null;
+  completedAt?: string | null;
+};
+
+export type CallingBatchStatusPatch = {
+  status: DbCallingBatchStatus;
+  startedAt?: string | null;
+  completedAt?: string | null;
+};
+
+export type CallingProspectStatusPatch = {
+  status: DbCallingProspectStatus;
+  lastCallAt?: string | null;
+  lastCallOutcome?: string | null;
 };
 
 export interface StorageAdapter {
@@ -106,6 +142,35 @@ export interface StorageAdapter {
   listLoftBookings(): Promise<DbLoftBookingRow[]>;
   hasLoftAccess(userId: string): Promise<boolean>;
   grantLoftAccess(userId: string): Promise<void>;
+  listCallingProspects(): Promise<DbCallingProspectRow[]>;
+  findCallingProspectById(id: string): Promise<DbCallingProspectRow | null>;
+  insertCallingProspect(row: DbCallingProspectRow): Promise<void>;
+  upsertCallingProspects(
+    rows: DbCallingProspectRow[],
+  ): Promise<UpsertCallingProspectsResult>;
+  updateCallingProspectStatus(
+    prospectId: string,
+    patch: CallingProspectStatusPatch,
+  ): Promise<DbCallingProspectRow | null>;
+  listCallingBatches(limit: number): Promise<DbCallingBatchRow[]>;
+  findCallingBatchById(id: string): Promise<DbCallingBatchRow | null>;
+  insertCallingBatch(
+    batch: DbCallingBatchRow,
+    calls: DbCallingCallRow[],
+  ): Promise<void>;
+  updateCallingBatchStatus(
+    batchId: string,
+    patch: CallingBatchStatusPatch,
+  ): Promise<DbCallingBatchRow | null>;
+  listCallingCalls(limit: number): Promise<DbCallingCallRow[]>;
+  listCallingCallsByBatch(batchId: string): Promise<DbCallingCallRow[]>;
+  findCallingCallById(id: string): Promise<DbCallingCallRow | null>;
+  findNextQueuedCallingCall(batchId: string): Promise<DbCallingCallRow | null>;
+  updateCallingCallStatus(
+    callId: string,
+    patch: CallingCallStatusPatch,
+  ): Promise<DbCallingCallRow | null>;
+  getLastCallingSheetSyncAt(): Promise<string | null>;
   insertScheduledSocialPosts(rows: DbScheduledSocialPostRow[]): Promise<void>;
   listScheduledSocialPosts(): Promise<DbScheduledSocialPostWithCreatorRow[]>;
   findScheduledSocialPostById(
