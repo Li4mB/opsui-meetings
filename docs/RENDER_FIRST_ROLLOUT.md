@@ -72,6 +72,7 @@ OPENAI_API_KEY=<existing-production-value>
 OPSUI_OPENAI_MODEL=gpt-5.2
 OPSUI_OPENAI_VECTOR_STORE_ID=<existing-production-value-if-used>
 OPSUI_MAKE_MEETING_REQUEST_WEBHOOK_URL=<existing-production-value-if-used>
+OPSUI_VAPI_EVENT_SECRET=<new-dedicated-random-secret>
 ```
 
 ## Environment variables to leave unset
@@ -112,7 +113,8 @@ After the Render deploy finishes, verify these in order:
 3. `GET /auth/bootstrap` returns the expected approved users on a fresh device
 4. `GET /users` still returns the current team after admin login
 5. meeting sync still works
-6. the desktop app can sign in on a new machine without first logging in as
+6. `POST /calling/vapi-events` without `X-Calling-Secret` returns `401`
+7. the desktop app can sign in on a new machine without first logging in as
    `opsui-admin`
 
 ## Do not do this yet

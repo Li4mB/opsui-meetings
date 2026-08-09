@@ -2,9 +2,11 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type {
   CallingBatch,
   CallingCall,
+  CallingExternalCall,
   CallingProspect,
   CallingProspectStatus,
   CallingSheetSource,
+  CallingTestMode,
   CallingWorkspaceResponse,
 } from "@opsui/shared";
 import {
@@ -12,6 +14,7 @@ import {
   createCallingBatch,
   createCallingProspect,
   createCallingSheetSource,
+  createCallingTestCall,
   deleteCallingSheetSource,
   getCallingWorkspace,
   startNextCallingBatchCall,
@@ -46,7 +49,30 @@ const callStatusLabels: Record<CallingCall["status"], string> = {
 const emptyProspects: CallingProspect[] = [];
 const emptyBatches: CallingBatch[] = [];
 const emptyCalls: CallingCall[] = [];
+const emptyExternalCalls: CallingExternalCall[] = [];
 const emptySheetSources: CallingSheetSource[] = [];
+const testPhoneStorageKey = "opsui.calling.test-phone";
+const testCaseStorageKey = "opsui.calling.mr-tester-case";
+const testModeStorageKey = "opsui.calling.test-mode";
+
+const getSavedValue = (key: string) => {
+  try {
+    return window.localStorage.getItem(key) ?? "";
+  } catch {
+    return "";
+  }
+};
+
+const saveValue = (key: string, value: string) => {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // A blocked local store should not prevent a test call from being sent.
+  }
+};
+
+const getSavedTestMode = (): CallingTestMode =>
+  getSavedValue(testModeStorageKey) === "mr_tester" ? "mr_tester" : "phone";
 
 const formatDateTime = (value: string | null) => {
   if (!value) {
@@ -59,6 +85,21 @@ const formatDateTime = (value: string | null) => {
     hour: "numeric",
     minute: "2-digit",
   }).format(new Date(value));
+};
+
+const formatTranscriptTime = (value: string) =>
+  new Intl.DateTimeFormat(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+    second: "2-digit",
+  }).format(new Date(value));
+
+const externalCallStatusLabels: Record<CallingExternalCall["status"], string> = {
+  queued: "Queued",
+  ringing: "Ringing",
+  in_progress: "Live",
+  ended: "Ended",
+  failed: "Failed",
 };
 
 const getErrorMessage = (error: unknown, fallback: string) =>
@@ -84,6 +125,7 @@ const getBatchProgress = (batch: CallingBatch | null, calls: CallingCall[]) => {
 export const CallingPanel = ({ authToken }: Props) => {
   const [workspace, setWorkspace] = useState<CallingWorkspaceResponse | null>(null);
   const [activeTab, setActiveTab] = useState<CallingTab>("prospects");
+  const [selectedExternalCallId, setSelectedExternalCallId] = useState<string | null>(null);
   const [selectedProspectIds, setSelectedProspectIds] = useState<Set<string>>(
     () => new Set(),
   );
@@ -93,6 +135,9 @@ export const CallingPanel = ({ authToken }: Props) => {
   const [isBusy, setIsBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [testMode, setTestMode] = useState<CallingTestMode>(getSavedTestMode);
+  const [testPhone, setTestPhone] = useState(() => getSavedValue(testPhoneStorageKey));
+  const [testCase, setTestCase] = useState(() => getSavedValue(testCaseStorageKey));
   const [form, setForm] = useState({
     name: "",
     phone: "",
@@ -127,7 +172,19 @@ export const CallingPanel = ({ authToken }: Props) => {
   const prospects = workspace?.prospects ?? emptyProspects;
   const batches = workspace?.batches ?? emptyBatches;
   const calls = workspace?.calls ?? emptyCalls;
+  const externalCalls = workspace?.externalCalls ?? emptyExternalCalls;
   const sheetSources = workspace?.sheetSources ?? emptySheetSources;
+  const hasActiveExternalCall = externalCalls.some((call) =>
+    ["queued", "ringing", "in_progress"].includes(call.status),
+  );
+  const activeExternalCallCount = externalCalls.filter((call) =>
+    ["queued", "ringing", "in_progress"].includes(call.status),
+  ).length;
+  const selectedExternalCall =
+    externalCalls.find((call) => call.vapiCallId === selectedExternalCallId) ??
+    externalCalls[0] ??
+    null;
+  const selectedCallIsMrTester = selectedExternalCall?.source === "opsui_mr_tester";
   const latestBatch = batches[0] ?? null;
   const activeBatch =
     batches.find((batch) => batch.status === "running" || batch.status === "queued") ??
@@ -144,6 +201,45 @@ export const CallingPanel = ({ authToken }: Props) => {
     () => new Map(prospects.map((prospect) => [prospect.id, prospect])),
     [prospects],
   );
+
+  useEffect(() => {
+    if (!externalCalls.length) {
+      setSelectedExternalCallId(null);
+      return;
+    }
+
+    if (!externalCalls.some((call) => call.vapiCallId === selectedExternalCallId)) {
+      const preferred =
+        externalCalls.find((call) => call.status === "in_progress") ?? externalCalls[0];
+      setSelectedExternalCallId(preferred.vapiCallId);
+    }
+  }, [externalCalls, selectedExternalCallId]);
+
+  useEffect(() => {
+    if (activeTab !== "queue" || !hasActiveExternalCall) {
+      return undefined;
+    }
+
+    let cancelled = false;
+    let requestInFlight = false;
+    const poll = async () => {
+      if (cancelled || requestInFlight || document.visibilityState === "hidden") {
+        return;
+      }
+      requestInFlight = true;
+      try {
+        await refreshWorkspace(true);
+      } finally {
+        requestInFlight = false;
+      }
+    };
+    const interval = window.setInterval(() => void poll(), 1_500);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [activeTab, hasActiveExternalCall, refreshWorkspace]);
   const selectedProspects = [...selectedProspectIds]
     .map((id) => prospectsById.get(id))
     .filter((prospect): prospect is CallingProspect => Boolean(prospect));
@@ -302,6 +398,47 @@ export const CallingPanel = ({ authToken }: Props) => {
     }
   };
 
+  const handleSendTestCall = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const phone = testPhone.trim();
+    const instructions = testCase.trim();
+
+    if (testMode === "phone" && phone.length < 6) {
+      setError("Enter a valid phone number before sending the test call.");
+      return;
+    }
+
+    if (testMode === "mr_tester" && instructions.length < 3) {
+      setError("Describe the test case or instructions for Mr Tester.");
+      return;
+    }
+
+    setIsBusy(true);
+    setError(null);
+    setMessage(null);
+    saveValue(testModeStorageKey, testMode);
+
+    try {
+      await createCallingTestCall(
+        authToken,
+        testMode === "mr_tester"
+          ? { mode: "mr_tester", testCase: instructions }
+          : { mode: "phone", phone },
+      );
+      await refreshWorkspace(true);
+      setMessage(
+        testMode === "mr_tester"
+          ? "Mr Tester scenario started. Its conversation will appear in Live transcripts."
+          : `Test call sent to ${phone}. This number is saved for next time.`,
+      );
+    } catch (testCallError) {
+      setError(getErrorMessage(testCallError, "Unable to send the test call."));
+      await refreshWorkspace(true);
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
   const handleCreateSheetSource = async (
     event: React.FormEvent<HTMLFormElement>,
   ) => {
@@ -386,6 +523,10 @@ export const CallingPanel = ({ authToken }: Props) => {
         <div className="calling-summary">
           <span>Completed</span>
           <strong>{completedCount}</strong>
+        </div>
+        <div className="calling-summary">
+          <span>Live calls</span>
+          <strong>{activeExternalCallCount}</strong>
         </div>
         <div className="calling-summary">
           <span>Sheet</span>
@@ -540,6 +681,114 @@ export const CallingPanel = ({ authToken }: Props) => {
         </div>
       ) : activeTab === "queue" ? (
         <div className="calling-queue">
+          <form
+            className="calling-test-call"
+            onSubmit={(event) => void handleSendTestCall(event)}
+          >
+            <div className="calling-test-call__copy">
+              <div className="sidebar-section__label">Tester</div>
+              <h2>{testMode === "mr_tester" ? "Run a voice-agent scenario" : "Send a test call"}</h2>
+              <p>
+                {testMode === "mr_tester"
+                  ? "Mr Tester calls the OpsUI agent, follows your scenario, and streams both voices live."
+                  : "Call your saved number through the live Make and Vapi workflow."}
+              </p>
+              <div className="calling-test-call__mode" aria-label="Test call mode">
+                <span className={testMode === "phone" ? "is-active" : ""}>
+                  Direct phone
+                </span>
+                <button
+                  aria-checked={testMode === "mr_tester"}
+                  aria-label={`Switch to ${testMode === "phone" ? "Mr Tester" : "direct phone"} mode`}
+                  className="calling-test-call__switch"
+                  onClick={() => {
+                    const nextMode = testMode === "phone" ? "mr_tester" : "phone";
+                    setTestMode(nextMode);
+                    saveValue(testModeStorageKey, nextMode);
+                    setError(null);
+                    setMessage(null);
+                  }}
+                  role="switch"
+                  type="button"
+                >
+                  <span aria-hidden="true">
+                    <svg fill="none" viewBox="0 0 24 24">
+                      <path d="M7 7h10m0 0-3-3m3 3-3 3M17 17H7m0 0 3 3m-3-3 3-3" />
+                    </svg>
+                  </span>
+                </button>
+                <span className={testMode === "mr_tester" ? "is-active" : ""}>
+                  Mr Tester
+                </span>
+              </div>
+            </div>
+            <label
+              className="calling-test-call__field"
+              htmlFor={testMode === "mr_tester" ? "calling-test-case" : "calling-test-phone"}
+            >
+              <span>{testMode === "mr_tester" ? "Test case or instructions" : "Test phone number"}</span>
+              <div className="calling-test-call__controls">
+                {testMode === "mr_tester" ? (
+                  <textarea
+                    id="calling-test-case"
+                    maxLength={4000}
+                    onChange={(event) => {
+                      setTestCase(event.target.value);
+                      saveValue(testCaseStorageKey, event.target.value);
+                    }}
+                    placeholder="Example: Act interested at first, then raise a pricing objection and ask for a follow-up next Tuesday."
+                    required
+                    rows={4}
+                    value={testCase}
+                  />
+                ) : (
+                  <input
+                    autoComplete="tel"
+                    id="calling-test-phone"
+                    maxLength={40}
+                    onChange={(event) => {
+                      setTestPhone(event.target.value);
+                      saveValue(testPhoneStorageKey, event.target.value);
+                    }}
+                    placeholder="+61 4xx xxx xxx"
+                    required
+                    type="tel"
+                    value={testPhone}
+                  />
+                )}
+                <button
+                  className="header-action-button header-action-button--primary"
+                  disabled={
+                    isBusy ||
+                    !workspace?.webhookConfigured ||
+                    (testMode === "phone"
+                      ? testPhone.trim().length < 6
+                      : testCase.trim().length < 3)
+                  }
+                  title={
+                    workspace?.webhookConfigured
+                      ? testMode === "mr_tester"
+                        ? "Start this scenario with Mr Tester"
+                        : "Send a test call to this number"
+                      : "Calling webhook not configured yet"
+                  }
+                  type="submit"
+                >
+                  {isBusy
+                    ? "Starting..."
+                    : testMode === "mr_tester"
+                      ? "Run scenario"
+                      : "Send test call"}
+                </button>
+              </div>
+              <small>
+                {testMode === "mr_tester"
+                  ? "This scenario is saved on this device and passed only to this call."
+                  : "Saved on this device for repeat testing."}
+              </small>
+            </label>
+          </form>
+
           <div className="calling-queue__hero">
             <div>
               <div className="sidebar-section__label">Active batch</div>
@@ -565,6 +814,125 @@ export const CallingPanel = ({ authToken }: Props) => {
           <div className="calling-progress" aria-label="Batch progress">
             <span style={{ width: `${progress}%` }} />
           </div>
+
+          <section className="calling-live" aria-labelledby="calling-live-heading">
+            <div className="calling-live__heading">
+              <div>
+                <div className="sidebar-section__label">Vapi voice calls</div>
+                <h2 id="calling-live-heading">Live transcripts</h2>
+              </div>
+              <span className="calling-live__connection">
+                <span aria-hidden="true" className={hasActiveExternalCall ? "is-live" : ""} />
+                {hasActiveExternalCall ? "Receiving events" : "No live calls"}
+              </span>
+            </div>
+
+            {externalCalls.length ? (
+              <div className="calling-live__layout">
+                <div className="calling-live__calls" aria-label="Vapi voice calls">
+                  {externalCalls.map((call) => (
+                    <button
+                      aria-pressed={call.vapiCallId === selectedExternalCall?.vapiCallId}
+                      className={`calling-live__call ${
+                        call.vapiCallId === selectedExternalCall?.vapiCallId
+                          ? "calling-live__call--selected"
+                          : ""
+                      }`}
+                      key={call.vapiCallId}
+                      onClick={() => setSelectedExternalCallId(call.vapiCallId)}
+                      type="button"
+                    >
+                      <span>
+                        <strong>{call.leadName || call.companyName}</strong>
+                        <small>{call.companyName || call.phone || "Cold lead"}</small>
+                      </span>
+                      <span className={`calling-status calling-status--${call.status}`}>
+                        {externalCallStatusLabels[call.status]}
+                      </span>
+                      <time dateTime={call.updatedAt}>{formatDateTime(call.updatedAt)}</time>
+                    </button>
+                  ))}
+                </div>
+
+                {selectedExternalCall ? (
+                  <div className="calling-transcript">
+                    <div className="calling-transcript__header">
+                      <div>
+                        <strong>{selectedExternalCall.leadName}</strong>
+                        <span>
+                          {selectedExternalCall.companyName}
+                          {selectedExternalCall.phone ? ` / ${selectedExternalCall.phone}` : ""}
+                        </span>
+                      </div>
+                      <span className={`calling-status calling-status--${selectedExternalCall.status}`}>
+                        {externalCallStatusLabels[selectedExternalCall.status]}
+                      </span>
+                    </div>
+
+                    <div
+                      aria-label={`Transcript for ${selectedExternalCall.leadName}`}
+                      aria-live="polite"
+                      className="calling-transcript__log"
+                      role="log"
+                    >
+                      {selectedExternalCall.transcriptTurns.length ? (
+                        selectedExternalCall.transcriptTurns.map((turn) => (
+                          <div
+                            className={`calling-transcript__turn calling-transcript__turn--${turn.role}`}
+                            key={turn.id}
+                          >
+                            <div>
+                              <strong>
+                                {selectedCallIsMrTester
+                                  ? turn.role === "assistant"
+                                    ? "Mr Tester"
+                                    : "OpsUI agent"
+                                  : turn.role === "assistant"
+                                    ? "OpsUI agent"
+                                    : "Customer"}
+                              </strong>
+                              <time dateTime={turn.occurredAt}>{formatTranscriptTime(turn.occurredAt)}</time>
+                            </div>
+                            <p>{turn.transcript}</p>
+                          </div>
+                        ))
+                      ) : (
+                        <div className="calling-transcript__empty">
+                          Waiting for the first final transcript line...
+                        </div>
+                      )}
+
+                      {selectedExternalCall.partialTranscript ? (
+                        <div className="calling-transcript__partial">
+                          <span>
+                            {selectedCallIsMrTester
+                              ? selectedExternalCall.partialRole === "assistant"
+                                ? "Mr Tester speaking"
+                                : "OpsUI agent speaking"
+                              : selectedExternalCall.partialRole === "assistant"
+                                ? "OpsUI agent speaking"
+                                : "Customer speaking"}
+                          </span>
+                          <p>{selectedExternalCall.partialTranscript}</p>
+                        </div>
+                      ) : null}
+                    </div>
+
+                    {selectedExternalCall.summary ? (
+                      <div className="calling-transcript__summary">
+                        <strong>Call summary</strong>
+                        <p>{selectedExternalCall.summary}</p>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <div className="calling-empty">
+                Vapi calls will appear here when Make forwards the first event.
+              </div>
+            )}
+          </section>
 
           <div className="calling-call-list">
             {activeBatchCalls.length ? (
@@ -662,6 +1030,7 @@ export const CallingPanel = ({ authToken }: Props) => {
               </div>
             )}
           </div>
+
         </div>
       ) : (
         <form className="calling-form" onSubmit={(event) => void handleCreateProspect(event)}>

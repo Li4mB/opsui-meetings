@@ -135,6 +135,7 @@ export const env = {
     process.env.OPSUI_MAKE_MEETING_REQUEST_WEBHOOK_URL ?? "",
   callingWebhookUrl: process.env.OPSUI_CALLING_WEBHOOK_URL ?? "",
   callingWebhookSecret: process.env.OPSUI_CALLING_WEBHOOK_SECRET ?? "",
+  vapiEventSecret: process.env.OPSUI_VAPI_EVENT_SECRET ?? "",
   googleProspectsSheetId: resolvedGoogleProspectsSheetIds[0] ?? "",
   googleProspectsSheetIds: resolvedGoogleProspectsSheetIds,
   googleProspectsSheetRange:

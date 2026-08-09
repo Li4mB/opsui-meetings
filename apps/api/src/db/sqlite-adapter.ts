@@ -12,8 +12,10 @@ import type {
   DbAutoPostAgentConfigRow,
   DbCallingBatchRow,
   DbCallingCallRow,
+  DbCallingExternalCallRow,
   DbCallingProspectRow,
   DbCallingSheetSourceRow,
+  DbCallingTranscriptTurnRow,
   DbLoftBookingRow,
   DbMeetingRequestRow,
   DbMeetingRow,
@@ -296,6 +298,46 @@ const schemaSql = `
 
   CREATE INDEX IF NOT EXISTS idx_calling_calls_status
     ON calling_calls(status, updated_at DESC);
+
+  CREATE TABLE IF NOT EXISTS calling_external_calls (
+    vapi_call_id TEXT PRIMARY KEY,
+    source TEXT NOT NULL DEFAULT 'opsui_cold_leads',
+    lead_external_id TEXT,
+    lead_name TEXT NOT NULL DEFAULT '',
+    company_name TEXT NOT NULL DEFAULT '',
+    phone TEXT NOT NULL DEFAULT '',
+    context_json TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL CHECK(status IN ('queued', 'ringing', 'in_progress', 'ended', 'failed')) DEFAULT 'queued',
+    outcome TEXT,
+    summary TEXT,
+    report_json TEXT,
+    partial_role TEXT CHECK(partial_role IN ('assistant', 'customer')),
+    partial_transcript TEXT,
+    partial_updated_at TEXT,
+    last_final_at TEXT,
+    started_at TEXT,
+    ended_at TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_calling_external_calls_status
+    ON calling_external_calls(status, updated_at DESC);
+
+  CREATE TABLE IF NOT EXISTS calling_transcript_turns (
+    id TEXT PRIMARY KEY,
+    vapi_call_id TEXT NOT NULL,
+    event_key TEXT NOT NULL UNIQUE,
+    role TEXT NOT NULL CHECK(role IN ('assistant', 'customer')),
+    transcript TEXT NOT NULL,
+    occurred_at TEXT NOT NULL,
+    sequence_index INTEGER NOT NULL,
+    created_at TEXT NOT NULL,
+    FOREIGN KEY (vapi_call_id) REFERENCES calling_external_calls(vapi_call_id) ON DELETE CASCADE
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_calling_transcript_turns_call
+    ON calling_transcript_turns(vapi_call_id, sequence_index, occurred_at);
 
   CREATE TABLE IF NOT EXISTS calling_sheet_sources (
     id TEXT PRIMARY KEY,
@@ -1594,6 +1636,139 @@ export const createSqliteAdapter = (): StorageAdapter => {
           )
           .get(callId) ?? null
       );
+    },
+
+    async listCallingExternalCalls(limit) {
+      const database = getDb();
+      return database
+        .prepare<unknown[], DbCallingExternalCallRow>(
+          "SELECT * FROM calling_external_calls ORDER BY updated_at DESC LIMIT ?",
+        )
+        .all(limit);
+    },
+
+    async findCallingExternalCallById(vapiCallId) {
+      const database = getDb();
+      return (
+        database
+          .prepare<unknown[], DbCallingExternalCallRow>(
+            "SELECT * FROM calling_external_calls WHERE vapi_call_id = ? LIMIT 1",
+          )
+          .get(vapiCallId) ?? null
+      );
+    },
+
+    async upsertCallingExternalCall(row) {
+      const database = getDb();
+      database.prepare(`
+        INSERT INTO calling_external_calls (
+          vapi_call_id, source, lead_external_id, lead_name, company_name, phone,
+          context_json, status, outcome, summary, report_json, partial_role,
+          partial_transcript, partial_updated_at, last_final_at, started_at,
+          ended_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(vapi_call_id) DO UPDATE SET
+          source = excluded.source,
+          lead_external_id = excluded.lead_external_id,
+          lead_name = excluded.lead_name,
+          company_name = excluded.company_name,
+          phone = excluded.phone,
+          context_json = excluded.context_json,
+          status = excluded.status,
+          outcome = excluded.outcome,
+          summary = excluded.summary,
+          report_json = excluded.report_json,
+          started_at = excluded.started_at,
+          ended_at = excluded.ended_at,
+          updated_at = excluded.updated_at
+      `).run(
+        row.vapi_call_id, row.source, row.lead_external_id, row.lead_name,
+        row.company_name, row.phone, row.context_json, row.status, row.outcome,
+        row.summary, row.report_json, row.partial_role, row.partial_transcript,
+        row.partial_updated_at, row.last_final_at, row.started_at, row.ended_at,
+        row.created_at, row.updated_at,
+      );
+    },
+
+    async updateCallingExternalTranscript(vapiCallId, patch) {
+      const database = getDb();
+
+      if (patch.lastFinalAt) {
+        const result = database.prepare(`
+          UPDATE calling_external_calls
+          SET
+            last_final_at = CASE
+              WHEN last_final_at IS NULL OR last_final_at < ? THEN ?
+              ELSE last_final_at
+            END,
+            partial_role = CASE
+              WHEN partial_updated_at IS NULL OR partial_updated_at <= ? THEN NULL
+              ELSE partial_role
+            END,
+            partial_transcript = CASE
+              WHEN partial_updated_at IS NULL OR partial_updated_at <= ? THEN NULL
+              ELSE partial_transcript
+            END,
+            partial_updated_at = CASE
+              WHEN partial_updated_at IS NULL OR partial_updated_at <= ? THEN NULL
+              ELSE partial_updated_at
+            END,
+            updated_at = ?
+          WHERE vapi_call_id = ?
+        `).run(
+          patch.lastFinalAt, patch.lastFinalAt, patch.lastFinalAt,
+          patch.lastFinalAt, patch.lastFinalAt, new Date().toISOString(),
+          vapiCallId,
+        );
+        return result.changes > 0;
+      }
+
+      if (!patch.partialUpdatedAt || !patch.partialRole || !patch.partialTranscript) {
+        return false;
+      }
+
+      const result = database.prepare(`
+        UPDATE calling_external_calls
+        SET partial_role = ?, partial_transcript = ?, partial_updated_at = ?, updated_at = ?
+        WHERE vapi_call_id = ?
+          AND (last_final_at IS NULL OR last_final_at < ?)
+          AND (partial_updated_at IS NULL OR partial_updated_at <= ?)
+      `).run(
+        patch.partialRole, patch.partialTranscript, patch.partialUpdatedAt,
+        new Date().toISOString(), vapiCallId, patch.partialUpdatedAt,
+        patch.partialUpdatedAt,
+      );
+      return result.changes > 0;
+    },
+
+    async listCallingTranscriptTurns(vapiCallIds) {
+      if (!vapiCallIds.length) {
+        return [];
+      }
+
+      const database = getDb();
+      const placeholders = vapiCallIds.map(() => "?").join(", ");
+      return database
+        .prepare<unknown[], DbCallingTranscriptTurnRow>(
+          `SELECT * FROM calling_transcript_turns
+           WHERE vapi_call_id IN (${placeholders})
+           ORDER BY sequence_index ASC, occurred_at ASC, created_at ASC`,
+        )
+        .all(...vapiCallIds);
+    },
+
+    async insertCallingTranscriptTurn(row) {
+      const database = getDb();
+      const result = database.prepare(`
+        INSERT OR IGNORE INTO calling_transcript_turns (
+          id, vapi_call_id, event_key, role, transcript, occurred_at,
+          sequence_index, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        row.id, row.vapi_call_id, row.event_key, row.role, row.transcript,
+        row.occurred_at, row.sequence_index, row.created_at,
+      );
+      return result.changes > 0;
     },
 
     async listCallingSheetSources() {

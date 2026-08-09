@@ -6,8 +6,10 @@ import type {
   DbAutoPostAgentConfigRow,
   DbCallingBatchRow,
   DbCallingCallRow,
+  DbCallingExternalCallRow,
   DbCallingProspectRow,
   DbCallingSheetSourceRow,
+  DbCallingTranscriptTurnRow,
   DbCallingBatchStatus,
   DbCallingCallStatus,
   DbCallingProspectStatus,
@@ -82,6 +84,13 @@ export type CallingProspectStatusPatch = {
   status: DbCallingProspectStatus;
   lastCallAt?: string | null;
   lastCallOutcome?: string | null;
+};
+
+export type CallingExternalTranscriptPatch = {
+  partialRole: DbCallingExternalCallRow["partial_role"];
+  partialTranscript: string | null;
+  partialUpdatedAt: string | null;
+  lastFinalAt?: string | null;
 };
 
 export interface StorageAdapter {
@@ -171,6 +180,19 @@ export interface StorageAdapter {
     callId: string,
     patch: CallingCallStatusPatch,
   ): Promise<DbCallingCallRow | null>;
+  listCallingExternalCalls(limit: number): Promise<DbCallingExternalCallRow[]>;
+  findCallingExternalCallById(
+    vapiCallId: string,
+  ): Promise<DbCallingExternalCallRow | null>;
+  upsertCallingExternalCall(row: DbCallingExternalCallRow): Promise<void>;
+  updateCallingExternalTranscript(
+    vapiCallId: string,
+    patch: CallingExternalTranscriptPatch,
+  ): Promise<boolean>;
+  listCallingTranscriptTurns(
+    vapiCallIds: string[],
+  ): Promise<DbCallingTranscriptTurnRow[]>;
+  insertCallingTranscriptTurn(row: DbCallingTranscriptTurnRow): Promise<boolean>;
   listCallingSheetSources(): Promise<DbCallingSheetSourceRow[]>;
   insertCallingSheetSource(row: DbCallingSheetSourceRow): Promise<void>;
   deleteCallingSheetSource(id: string): Promise<boolean>;

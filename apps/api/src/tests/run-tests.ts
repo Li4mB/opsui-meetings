@@ -4,14 +4,21 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
 import argon2 from "argon2";
+import Fastify from "fastify";
+import sensible from "@fastify/sensible";
 import { SignJWT, jwtVerify } from "jose";
 import { nanoid } from "nanoid";
+import { createCallingTestCallInputSchema } from "@opsui/shared";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { env } from "../config/env.js";
 import { createSqliteAdapter } from "../db/sqlite-adapter.js";
 import { parseProspectsFromValues } from "../modules/google-sheets-prospects.js";
+import {
+  ingestVapiServerEvent,
+  registerCallingRoutes,
+} from "../modules/calling.js";
 import type { StorageAdapter } from "../db/adapter.js";
 import type {
   CalendarMeeting,
@@ -44,6 +51,40 @@ const signToken = (u: { id: string; username: string; displayName: string; role:
   new SignJWT({ username: u.username, displayName: u.displayName, role: u.role, colorHex: u.colorHex })
     .setProtectedHeader({ alg: "HS256" }).setSubject(u.id).setIssuedAt().setExpirationTime("7d")
     .sign(new TextEncoder().encode(secret));
+
+describe("Calling test-call contract", () => {
+  it("accepts a saved direct phone destination", () => {
+    assert.deepEqual(
+      createCallingTestCallInputSchema.parse({
+        mode: "phone",
+        phone: "  +61400111222  ",
+      }),
+      { mode: "phone", phone: "+61400111222" },
+    );
+  });
+
+  it("accepts Mr Tester instructions without a phone number", () => {
+    assert.deepEqual(
+      createCallingTestCallInputSchema.parse({
+        mode: "mr_tester",
+        testCase: "  Raise a pricing objection, then ask for a Tuesday follow-up.  ",
+      }),
+      {
+        mode: "mr_tester",
+        testCase: "Raise a pricing objection, then ask for a Tuesday follow-up.",
+      },
+    );
+  });
+
+  it("rejects missing scenario instructions", () => {
+    assert.throws(() =>
+      createCallingTestCallInputSchema.parse({
+        mode: "mr_tester",
+        testCase: "  ",
+      }),
+    );
+  });
+});
 
 // ========== 1. Init & Admin Seed ==========
 describe("1. Init & Admin Seed", () => {
@@ -574,6 +615,157 @@ describe("9. Auto-post slots + per-account history", () => {
     const editedPublished = await adapter.updateScheduledSocialPostCaption(published, "hacked");
     assert.equal(editedPublished, null);
     assert.equal((await adapter.findScheduledSocialPostById(published))!.caption, "locked");
+  });
+});
+
+describe("Vapi live transcript ingestion", () => {
+  let db: string;
+  let adapter: StorageAdapter;
+
+  before(async () => {
+    db = mkTemp();
+    env.dbPath = db;
+    adapter = createSqliteAdapter();
+    await adapter.initialize();
+  });
+
+  after(async () => {
+    await adapter.close();
+    cleanup(db);
+  });
+
+  const transcriptEvent = (
+    transcriptType: "partial" | "final",
+    transcript: string,
+    timestamp: string,
+    role: "user" | "assistant" = "user",
+  ) => ({
+    message: {
+      type: "transcript",
+      call: {
+        id: "vapi-call-1",
+        createdAt: "2026-08-07T01:00:00.000Z",
+        metadata: {
+          source: "opsui_cold_leads",
+          lead_external_id: "sheet-row-42",
+          company_name: "Acme Logistics",
+          phone: "+6421000000",
+        },
+      },
+      role,
+      transcriptType,
+      transcript,
+      timestamp,
+      turn: role === "user" ? 1 : 2,
+    },
+  });
+
+  it("replaces partial text, persists final turns, and ignores retries", async () => {
+    await ingestVapiServerEvent(
+      transcriptEvent("partial", "I need", "2026-08-07T01:00:01.000Z"),
+      adapter,
+    );
+    await ingestVapiServerEvent(
+      transcriptEvent("partial", "I need better stock control", "2026-08-07T01:00:02.000Z"),
+      adapter,
+    );
+
+    let call = await adapter.findCallingExternalCallById("vapi-call-1");
+    assert.equal(call?.partial_transcript, "I need better stock control");
+    assert.equal(call?.company_name, "Acme Logistics");
+
+    const finalEvent = transcriptEvent(
+      "final",
+      "I need better stock control",
+      "2026-08-07T01:00:03.000Z",
+    );
+    await ingestVapiServerEvent(finalEvent, adapter);
+    await ingestVapiServerEvent(finalEvent, adapter);
+
+    call = await adapter.findCallingExternalCallById("vapi-call-1");
+    const turns = await adapter.listCallingTranscriptTurns(["vapi-call-1"]);
+    assert.equal(call?.partial_transcript, null);
+    assert.equal(turns.length, 1);
+    assert.equal(turns[0].role, "customer");
+
+    await ingestVapiServerEvent(
+      transcriptEvent("partial", "stale words", "2026-08-07T01:00:02.500Z"),
+      adapter,
+    );
+    call = await adapter.findCallingExternalCallById("vapi-call-1");
+    assert.equal(call?.partial_transcript, null);
+  });
+
+  it("stores assistant speech and recovers missed turns from the end report", async () => {
+    await ingestVapiServerEvent(
+      transcriptEvent(
+        "final",
+        "Let us look at your warehouse process.",
+        "2026-08-07T01:00:04.000Z",
+        "assistant",
+      ),
+      adapter,
+    );
+    await ingestVapiServerEvent({
+      message: {
+        type: "end-of-call-report",
+        timestamp: "2026-08-07T01:01:00.000Z",
+        call: {
+          id: "vapi-call-1",
+          startedAt: "2026-08-07T01:00:00.000Z",
+          endedAt: "2026-08-07T01:01:00.000Z",
+          metadata: { company_name: "Acme Logistics" },
+        },
+        analysis: { summary: "Acme wants improved stock visibility." },
+        artifact: {
+          messages: [
+            {
+              role: "assistant",
+              message: "Let us look at your warehouse process.",
+              secondsFromStart: 4,
+            },
+            {
+              role: "user",
+              message: "Please send me the details.",
+              secondsFromStart: 45,
+            },
+          ],
+        },
+      },
+    }, adapter);
+
+    const call = await adapter.findCallingExternalCallById("vapi-call-1");
+    const turns = await adapter.listCallingTranscriptTurns(["vapi-call-1"]);
+    assert.equal(call?.status, "ended");
+    assert.equal(call?.summary, "Acme wants improved stock visibility.");
+    assert.deepEqual(turns.map((turn) => turn.role), ["customer", "assistant", "customer"]);
+  });
+
+  it("rejects requests without the Make-to-OpsUI secret", async () => {
+    const originalSecret = env.vapiEventSecret;
+    env.vapiEventSecret = "test-vapi-event-secret";
+    const app = Fastify();
+    await app.register(sensible);
+    registerCallingRoutes(app);
+
+    try {
+      const missing = await app.inject({
+        method: "POST",
+        url: "/calling/vapi-events",
+        payload: transcriptEvent("partial", "hello", "2026-08-07T01:02:00.000Z"),
+      });
+      const invalid = await app.inject({
+        method: "POST",
+        url: "/calling/vapi-events",
+        headers: { "x-calling-secret": "wrong" },
+        payload: transcriptEvent("partial", "hello", "2026-08-07T01:02:00.000Z"),
+      });
+      assert.equal(missing.statusCode, 401);
+      assert.equal(invalid.statusCode, 401);
+    } finally {
+      env.vapiEventSecret = originalSecret;
+      await app.close();
+    }
   });
 });
 

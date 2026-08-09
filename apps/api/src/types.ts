@@ -190,6 +190,48 @@ export type DbCallingCallRow = {
   updated_at: string;
 };
 
+export type DbCallingExternalCallStatus =
+  | "queued"
+  | "ringing"
+  | "in_progress"
+  | "ended"
+  | "failed";
+
+export type DbCallingTranscriptRole = "assistant" | "customer";
+
+export type DbCallingExternalCallRow = {
+  vapi_call_id: string;
+  source: string;
+  lead_external_id: string | null;
+  lead_name: string;
+  company_name: string;
+  phone: string;
+  context_json: string;
+  status: DbCallingExternalCallStatus;
+  outcome: string | null;
+  summary: string | null;
+  report_json: string | null;
+  partial_role: DbCallingTranscriptRole | null;
+  partial_transcript: string | null;
+  partial_updated_at: string | null;
+  last_final_at: string | null;
+  started_at: string | null;
+  ended_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type DbCallingTranscriptTurnRow = {
+  id: string;
+  vapi_call_id: string;
+  event_key: string;
+  role: DbCallingTranscriptRole;
+  transcript: string;
+  occurred_at: string;
+  sequence_index: number;
+  created_at: string;
+};
+
 export type DbCallingSheetSourceRow = {
   id: string;
   spreadsheet_id: string;
