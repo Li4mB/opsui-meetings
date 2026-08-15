@@ -50,6 +50,7 @@ import {
   createCallingBatchInputSchema,
   createCallingProspectInputSchema,
   createCallingSheetSourceInputSchema,
+  createCallingTestCallInputSchema,
 } from "@opsui/shared";
 
 const DEFAULT_API_BASE_URL = import.meta.env.DEV
@@ -264,6 +265,20 @@ export const createCallingBatch = (
       method: "POST",
       headers: withToken(token),
       body: JSON.stringify(createCallingBatchInputSchema.parse(input)),
+    },
+    callingBatchStartResponseSchema,
+  );
+
+export const createCallingTestCall = (
+  token: string,
+  input: z.infer<typeof createCallingTestCallInputSchema>,
+) =>
+  request(
+    "/calling/test-call",
+    {
+      method: "POST",
+      headers: withToken(token),
+      body: JSON.stringify(createCallingTestCallInputSchema.parse(input)),
     },
     callingBatchStartResponseSchema,
   );

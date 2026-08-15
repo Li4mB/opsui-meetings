@@ -84,6 +84,46 @@ Recommended production setup:
 
 ## API deployment
 
+### Vapi live transcript events
+
+The companion Make scenario posts Vapi events to:
+
+- `POST /calling/vapi-events`
+
+Set a dedicated high-entropy secret on the API deployment:
+
+- `OPSUI_VAPI_EVENT_SECRET=<random-secret>`
+
+Set the identical value as `OPSUI_VAPI_EVENT_SECRET` in the Make HTTP module's
+`X-Calling-Secret` header. Do not reuse the Vapi private API key. The endpoint is
+the only supported writer for `calling_external_calls` and
+`calling_transcript_turns`; desktop clients read this data through the
+authenticated `/calling` workspace route.
+
+### Mr Tester voice-agent scenarios
+
+The Calling queue supports two authenticated test modes through:
+
+- `POST /calling/test-call` with `{ "mode": "phone", "phone": "+..." }`
+- `POST /calling/test-call` with `{ "mode": "mr_tester", "testCase": "..." }`
+
+Import/build the workspace-level `make-opsui-test-calls.json` scenario and use
+its Custom Webhook URL as `OPSUI_CALLING_WEBHOOK_URL`. Configure the scenario's
+Mr Tester route with:
+
+- `MR_TESTER_ASSISTANT_ID`
+- `MR_TESTER_PHONE_NUMBER_ID`
+- `OPSUI_AGENT_TEST_NUMBER`
+- `MAKE_VAPI_EVENTS_WEBHOOK_URL`
+
+Apply the settings in `vapi-mr-tester-assistant.json` to the existing Vapi
+assistant named `mr tester`. Keep `{{test_case}}` in its system prompt; the
+scenario supplies that value per call, so one test cannot overwrite another.
+The Vapi call must request `transcript`, `status-update`, and
+`end-of-call-report` server messages and send them to the existing Make event
+relay. The API signs outbound Make jobs with `X-Calling-Secret`; reject a
+missing or invalid value before creating a Vapi call.
+
 ### Minimum production requirements
 
 - Node.js 22+
